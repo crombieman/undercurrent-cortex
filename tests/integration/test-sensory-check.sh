@@ -84,5 +84,43 @@ else
   _FAIL_COUNT=$((_FAIL_COUNT + 1))
 fi
 
+# Test 7: Anti-hang regression guard — without GNU coreutils `timeout`, network
+# calls must be SKIPPED, never run unbounded.
+# Root-cause defense for frozen SessionStart hooks: run_with_timeout must reject
+# a non-coreutils `timeout` (e.g. Windows timeout.exe shadowing GNU on PATH) and
+# skip the call — NOT run it through the wrong `timeout`, and NOT fall back to an
+# unbounded `"$@"` that can hang Claude Code forever.
+# Discriminator: with gh mocked as FAILURE, correct code skips gh entirely so
+# "CI FAILED" never appears; either regression (dropping the coreutils check, or
+# restoring the unbounded fallback) re-runs gh and the assertions go red.
+# Positive control: Test 2 proves real GNU timeout DOES surface "CI FAILED".
+setup_test
+create_legacy_state_file "$_TEST_TMPDIR/.claude" > /dev/null
+create_mock_git "$MOCK_BIN" "clean"
+create_mock_gh "$MOCK_BIN" "failure"
+# Shadow `timeout` with a non-coreutils impl. If a regression ever routes a real
+# command through it, it EXECs that command so the breach is observable in the
+# .calls logs (and as "CI FAILED" in the output).
+cat > "$MOCK_BIN/timeout" << TIMEOUTEOF
+#!/usr/bin/env bash
+echo "timeout \$*" >> "$MOCK_BIN/timeout.calls"
+if [ "\$1" = "--version" ]; then
+  echo "mock-timeout (not-gnu) 0.0"   # deliberately NOT coreutils
+  exit 0
+fi
+[ "\$1" = "-k" ] && shift 2            # drop -k <n>
+shift                                  # drop <seconds>
+exec "\$@"
+TIMEOUTEOF
+chmod +x "$MOCK_BIN/timeout"
+# Reset cumulative call logs (mocks append; MOCK_BIN persists across the suite)
+# so assertions reflect only THIS invocation.
+rm -f "$MOCK_BIN/git.calls" "$MOCK_BIN/gh.calls" "$MOCK_BIN/timeout.calls"
+result=$(bash "$SANDBOX/hooks/scripts/sensory-check.sh" 2>/dev/null || true)
+assert_not_contains "no_coreutils_timeout_skips_ci_check" "$result" "CI FAILED"
+assert_file_not_contains "no_coreutils_timeout_skips_git_fetch" "$MOCK_BIN/git.calls" "fetch"
+assert_file_not_contains "non_coreutils_timeout_never_runs_command" "$MOCK_BIN/timeout.calls" "gh"
+rm -f "$MOCK_BIN/timeout" "$MOCK_BIN/timeout.calls"
+
 export PATH="$SAVED_PATH"
 end_suite

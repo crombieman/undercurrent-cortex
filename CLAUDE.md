@@ -1,4 +1,10 @@
 # CLAUDE.md - Cortex Plugin
+<!-- Audited: 2026-04-02. Review quarterly. -->
+<!-- SCOPE: This is the PROJECT-LEVEL instruction file for the Cortex plugin.
+     Put ONLY plugin-specific rules here — bash/shell patterns, hook architecture,
+     state file layout, testing framework, Windows gotchas.
+     Cross-project behavioral rules are in ~/.claude/CLAUDE.md.
+     Universal preferences (communication, git, principles) are in ~/.claude/rules/. -->
 
 ## Project
 Claude Code plugin — session management, health tracking, context injection, adaptive learning. 13 biological systems that compound intelligence across coding sessions.
@@ -59,8 +65,8 @@ Claude Code plugin — session management, health tracking, context injection, a
 - Fixtures: `tests/lib/fixtures.sh` (creates temp dirs, state files, health files)
 - Categories: unit/, integration/, edge/, regression/
 
-## Git Workflow
-- Conventional commits (`feat:`, `fix:`, `refactor:`, `docs:`, `chore:`, `test:`)
+## Plugin Publishing
+<!-- Git workflow (conventional commits, atomic commits) now in ~/.claude/rules/git-workflow.md -->
 - Push to master
 - Plugin cache updates on `claude plugins install cortex@undercurrent-studio`
 

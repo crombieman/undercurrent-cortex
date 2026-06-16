@@ -15,14 +15,32 @@ if [ "${1:-}" = "--mid-session" ]; then
   MID_SESSION=true
 fi
 
-# --- Timeout wrapper (Windows Git Bash may lack `timeout`) ---
+# --- Non-interactive guard: never let git/gh block on an auth prompt ---
+# Root-cause fix for frozen SessionStart hooks: a stale GitHub token + Git
+# Credential Manager popup (or any interactive prompt) inside this blocking
+# hook hangs Claude Code indefinitely. Force every git/gh call below to fail
+# fast instead of prompting.
+export GIT_TERMINAL_PROMPT=0
+export GIT_OPTIONAL_LOCKS=0
+export GCM_INTERACTIVE=never
+export GIT_ASKPASS=echo
+export SSH_ASKPASS=echo
+export GH_NO_UPDATE_NOTIFIER=1
+export GH_PROMPT_DISABLED=1
+
+# --- Timeout wrapper (Windows Git Bash safe) ---
+# Only trust GNU coreutils `timeout` — Windows' timeout.exe is a different,
+# interactive command that mangles these invocations and may sit on PATH ahead
+# of (or instead of) GNU timeout in a hook shell. With no usable GNU timeout,
+# SKIP the network call rather than run it unbounded (the old `else "$@"`
+# branch could hang the hook forever).
 run_with_timeout() {
   local secs="$1"
   shift
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "$secs" "$@" 2>/dev/null || true
+  if command -v timeout >/dev/null 2>&1 && timeout --version 2>/dev/null | grep -qi coreutils; then
+    timeout -k 1 "$secs" "$@" 2>/dev/null || true
   else
-    "$@" 2>/dev/null || true
+    return 0
   fi
 }
 
