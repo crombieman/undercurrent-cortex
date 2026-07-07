@@ -22,4 +22,4 @@ jobs:
       - name: Run test suite
         run: bash tests/run-all.sh
         shell: bash
-        timeout-minutes: 25
+        timeout-minutes: 40

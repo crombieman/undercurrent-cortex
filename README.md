@@ -423,12 +423,12 @@ To create a domain pack:
 
 ## Test Suite
 
-26 test scripts organized by type:
+28 test scripts organized by type:
 
 ```text
 tests/
   run-all.sh                              # Test runner
-  unit/                                   # 5 tests — state-io, json-extract, escape-json, validate-organism, lint-antipatterns
+  unit/                                   # 6 tests — state-io, json-extract, escape-json, validate-organism, lint-antipatterns, event-io
   integration/                            # 17 tests — one per hook script + profiles + migration v3.7
   edge/                                   # 2 tests — empty stdin, Windows paths
   regression/                             # 2 tests — health dedup, pipefail glob
@@ -476,7 +476,7 @@ cortex/
   commands/           # 9 slash commands
   agents/             # conversation-analyzer + deep-dive + code-reviewer
   context/            # 11 context files (7 keyword-matched + 3 plan-audit reference + 1 index)
-  tests/              # 26 test scripts + 3 helpers (run-all.sh)
+  tests/              # 28 test scripts + 3 helpers (run-all.sh)
 ```
 
 ---
