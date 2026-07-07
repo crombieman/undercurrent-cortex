@@ -172,3 +172,22 @@ eio_item_hash() {
   local text="$1"
   printf '%s' "$text" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | cksum | awk '{print $1}'
 }
+
+# normalize_path "path"
+# Normalizes a file path: backslash → forward slash, lowercase drive → uppercase.
+# Used to prevent duplicate tracking of the same file with different path formats.
+# (Copied verbatim from state-io.sh — pure string logic, no side effects.)
+normalize_path() {
+  local p="$1"
+  # Backslash → forward slash
+  p="${p//\\//}"
+  # MSYS path /c/Users/... → C:/Users/...
+  if [[ "$p" =~ ^/([a-zA-Z])/ ]]; then
+    p="${BASH_REMATCH[1]^^}:/${p:3}"
+  fi
+  # Lowercase drive letter → uppercase (c:/ → C:/)
+  if [[ "$p" =~ ^[a-z]:/ ]]; then
+    p="${p^}"
+  fi
+  echo "$p"
+}

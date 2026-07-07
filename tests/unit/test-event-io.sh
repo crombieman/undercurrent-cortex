@@ -146,4 +146,7 @@ assert_eq "item_hash_trims_whitespace" "$h1" "$h2"
 is_num=no; case "$h1" in ''|*[!0-9]*) : ;; *) is_num=yes ;; esac
 assert_eq "item_hash_numeric" "yes" "$is_num"
 
+# --- normalize_path (copied verbatim from state-io.sh, wave 2 task 2) ---
+assert_eq "normalize_backslash_drive" "C:/Users/x" "$(normalize_path 'c:\Users\x')"
+
 end_suite
