@@ -208,7 +208,10 @@ if [ "$PROFILE" != "minimal" ] && [ -f "$HEALTH_FILE" ]; then
 
   # Topology-based mode: last 3 data rows all high-churn
   fb_data_rows=$(grep -v '^#' "$HEALTH_FILE" 2>/dev/null | grep -v '^$' | grep -v '^trend_' | grep -v '^avg_' | grep -v '^---' | grep '|' | tail -3)
-  fb_row_count=$(echo "$fb_data_rows" | grep -c '|' 2>/dev/null || echo "0")
+  fb_row_count=0
+  if echo "$fb_data_rows" | grep -q '|' 2>/dev/null; then
+    fb_row_count=$(echo "$fb_data_rows" | grep -c '|')
+  fi
   if [ "${fb_row_count:-0}" -ge 3 ]; then
     fb_churn_count=$(echo "$fb_data_rows" | awk -F'|' '$11 == "high-churn" {c++} END {print c+0}')
     if [ "${fb_churn_count:-0}" -ge 3 ]; then

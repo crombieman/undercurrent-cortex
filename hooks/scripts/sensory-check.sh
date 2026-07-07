@@ -104,7 +104,7 @@ if command -v gh >/dev/null 2>&1; then
   if [ -n "$pr_json" ] && [ "$pr_json" != "[]" ]; then
     pr_count=0
     if echo "$pr_json" | grep -q '"number"' 2>/dev/null; then
-      pr_count=$(echo "$pr_json" | grep -c '"number"' 2>/dev/null || echo "0")
+      pr_count=$(echo "$pr_json" | grep -c '"number"')
     fi
     if [ "${pr_count:-0}" -gt 0 ]; then
       output="${output}${pr_count} open PR(s) on this repo."$'\n'
