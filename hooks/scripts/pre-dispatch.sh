@@ -5,21 +5,23 @@ set -euo pipefail
 # Prompt-based hooks remain inline in hooks.json with their own matchers.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-source "$SCRIPT_DIR/lib/state-io.sh" || { printf '{}'; exit 0; }
+source "$SCRIPT_DIR/lib/event-io.sh"     || { printf '{}'; exit 0; }
 source "$SCRIPT_DIR/lib/json-extract.sh" || { printf '{}'; exit 0; }
 
 # Buffer stdin ONCE
 INPUT=$(cat)
 
-# Resolve state file for plan-mode tracking
-resolve_state_file "$INPUT" 2>/dev/null || true
+# Resolve session-scoped event log for plan-mode tracking
+resolve_event_log "$INPUT"
 
 # Extract tool_name for routing
 tool_name=$(printf '%s' "$INPUT" | extract_json_field "tool_name")
 
-# Detect ExitPlanMode BEFORE the early-exit filter
-if [ "$tool_name" = "ExitPlanMode" ] && [ -f "$STATE_FILE" ]; then
-  write_field "plan_mode_used" "true" "$STATE_FILE"
+# Detect ExitPlanMode BEFORE the early-exit filter. Missing/unresolved log
+# (un-opted repo) means the append is skipped, but routing below is unaffected —
+# routing is not state.
+if [ "$tool_name" = "ExitPlanMode" ] && [ -n "$EVENT_LOG" ] && [ -f "$EVENT_LOG" ]; then
+  append_event "plan_mode" "used"
 fi
 
 # Early exit for irrelevant tools
