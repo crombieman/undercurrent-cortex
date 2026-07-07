@@ -84,3 +84,60 @@ append_event() {
   value="${value//$'\n'/ }"
   printf '%s|%s|%s\n' "$(date +%s)" "$type" "$value" >> "$file"
 }
+
+# --- Readers: single-pass awk; NR (file) order authoritative; \r-tolerant ---
+
+# count_events <type> [value_prefix] [after_anchor_ere] [file]
+# value_prefix matches the FIRST space-token of the value ('' = no filter).
+# after_anchor_ere resets the count at each anchor occurrence => "since last anchor".
+count_events() {
+  local type="$1" prefix="${2:-}" anchor="${3:-}" file="${4:-$EVENT_LOG}"
+  [ -n "$file" ] && [ -f "$file" ] || { echo 0; return 0; }
+  TYPE="$type" PFX="$prefix" ANCH="$anchor" awk '
+    { sub(/\r$/, "") }
+    !/^[0-9]+\|[a-z_]+\|/ { next }
+    {
+      rest = substr($0, index($0, "|") + 1)
+      t = substr(rest, 1, index(rest, "|") - 1)
+      v = substr(rest, index(rest, "|") + 1)
+      if (ENVIRON["ANCH"] != "" && t ~ ("^(" ENVIRON["ANCH"] ")$")) { c = 0; next }
+      if (t != ENVIRON["TYPE"]) next
+      if (ENVIRON["PFX"] != "") { split(v, a, " "); if (a[1] != ENVIRON["PFX"]) next }
+      c++
+    }
+    END { print c + 0 }
+  ' "$file"
+}
+
+# last_event <type> [file] — value of the most recent event of type (last-wins).
+last_event() {
+  local type="$1" file="${2:-$EVENT_LOG}"
+  [ -n "$file" ] && [ -f "$file" ] || { echo ""; return 0; }
+  TYPE="$type" awk '
+    { sub(/\r$/, "") }
+    !/^[0-9]+\|[a-z_]+\|/ { next }
+    {
+      rest = substr($0, index($0, "|") + 1)
+      t = substr(rest, 1, index(rest, "|") - 1)
+      if (t != ENVIRON["TYPE"]) next
+      last = substr(rest, index(rest, "|") + 1)
+    }
+    END { print last }
+  ' "$file"
+}
+
+# list_events <type> [file] — all values, one per line, file order.
+list_events() {
+  local type="$1" file="${2:-$EVENT_LOG}"
+  [ -n "$file" ] && [ -f "$file" ] || return 0
+  TYPE="$type" awk '
+    { sub(/\r$/, "") }
+    !/^[0-9]+\|[a-z_]+\|/ { next }
+    {
+      rest = substr($0, index($0, "|") + 1)
+      t = substr(rest, 1, index(rest, "|") - 1)
+      if (t != ENVIRON["TYPE"]) next
+      print substr(rest, index(rest, "|") + 1)
+    }
+  ' "$file"
+}

@@ -47,4 +47,57 @@ resolve_event_log '{"no_sid":"here"}'
 assert_eq "resolve_missing_sid_blocks_appends" "" "$EVENT_LOG"
 unset CORTEX_PROJECT_DIR_OVERRIDE
 
+# --- count_events: basic + prefix filter ---
+EVENT_LOG=$(create_event_log "$TDIR/.claude" "s-count")
+append_event "file_edit" "r C:/a.ts"
+append_event "file_edit" "x C:/tmp/notes.md"
+append_event "file_edit" "r C:/b.ts"
+assert_eq "count_unfiltered" "3" "$(count_events file_edit)"
+assert_eq "count_prefix_r_flag" "2" "$(count_events file_edit r)"
+
+# --- count_events: after-anchor (edits since last commit, spec §3.5) ---
+EVENT_LOG=$(create_event_log "$TDIR/.claude" "s-anchor")
+append_event "file_edit" "r C:/a.ts"
+append_event "commit" "abc1234 feat: x"
+append_event "file_edit" "r C:/b.ts"
+append_event "file_edit" "r C:/c.ts"
+assert_eq "count_after_anchor" "2" "$(count_events file_edit r commit)"
+
+# --- count_events: anchor ERE alternation (escape hatch, spec §3.5) ---
+EVENT_LOG=$(create_event_log "$TDIR/.claude" "s-ere")
+append_event "stop_blocked" "gate1"
+append_event "stop_forced" "true"
+append_event "stop_blocked" "gate1"
+assert_eq "count_anchor_ere_alternation" "1" "$(count_events stop_blocked '' 'stop_approved|stop_forced')"
+
+# --- spec §3.5 required sequence: block, block, pass, block => no force ---
+EVENT_LOG=$(create_event_log "$TDIR/.claude" "s-seq")
+append_event "stop_blocked" "g1"; append_event "stop_blocked" "g1"
+append_event "stop_approved" "true"
+append_event "stop_blocked" "g1"
+assert_eq "block_block_pass_block_no_force" "1" "$(count_events stop_blocked '' 'stop_approved|stop_forced')"
+
+# --- last_event: empty when absent, last wins ---
+EVENT_LOG=$(create_event_log "$TDIR/.claude" "s-last")
+assert_eq "last_event_empty_when_absent" "" "$(last_event mode_set)"
+append_event "mode_set" "normal boot"
+append_event "mode_set" "cautious fix_ratio"
+assert_eq "last_event_last_wins" "cautious fix_ratio" "$(last_event mode_set)"
+
+# --- list_events: file order, pipes preserved in values ---
+EVENT_LOG=$(create_event_log "$TDIR/.claude" "s-list")
+append_event "carry_over" "item with | pipe"
+append_event "carry_over" "second"
+expected="item with | pipe
+second"
+assert_eq "list_events_order_and_pipes" "$expected" "$(list_events carry_over)"
+
+# --- malformed lines skipped; CRLF tolerated ---
+EVENT_LOG=$(create_event_log "$TDIR/.claude" "s-mal")
+printf 'garbage no pipes\n' >> "$EVENT_LOG"
+printf '1700000009|file_edit|r C:/crlf.ts\r\n' >> "$EVENT_LOG"
+printf '|||\n' >> "$EVENT_LOG"
+assert_eq "malformed_skipped_crlf_counted" "1" "$(count_events file_edit)"
+assert_eq "crlf_value_clean" "r C:/crlf.ts" "$(last_event file_edit)"
+
 end_suite
