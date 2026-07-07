@@ -136,4 +136,18 @@ assert_contains "missing_event_log_still_prompts" "$result" "Commit logged"
 journal="$_TEST_TMPDIR/memory/$(date +%Y-%m-%d).md"
 assert_file_contains "missing_event_log_journal_written" "$journal" "no session log test"
 
+# Test 12: non-amend commit with NO journal file — the hook contract (always
+# exit 0, valid JSON) must hold even when the journal is missing. Bypasses
+# run_post_bash (which pre-creates the journal) and captures the real exit code
+# (no || true swallowing).
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "commit-no-journal")
+make_commit "feat: no journal present"
+json=$(mock_json "session_id=commit-no-journal" "tool_input.command=git commit -m test")
+rc=0
+result=$(echo "$json" | CORTEX_PROJECT_DIR_OVERRIDE="$_TEST_TMPDIR" \
+  bash "$PLUGIN_ROOT/hooks/scripts/post-bash-dispatch.sh" 2>/dev/null) || rc=$?
+assert_eq "missing_journal_exits_zero" "0" "$rc"
+assert_json_valid "missing_journal_valid_json" "$result"
+
 end_suite

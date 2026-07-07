@@ -49,6 +49,10 @@ if echo "$command_str" | grep -qE '^[[:space:]]*git[[:space:]]+commit[[:space:]]
     today=$(date +%Y-%m-%d)
     time_now=$(date +%H:%M)
     journal="${PROJECT_DIR}/memory/${today}.md"
+    # Default before the journal gate — when no journal exists, msg is otherwise
+    # never assigned and the conventional-commit check below would trip set -u,
+    # crashing the hook without emitting valid JSON (hook contract violation).
+    msg="commit"
     if [ -f "$journal" ]; then
       msg=$(git -C "${PROJECT_DIR}" log -1 --pretty=format:"%s" 2>/dev/null || echo "commit")
       [ -z "$msg" ] && msg="commit"
