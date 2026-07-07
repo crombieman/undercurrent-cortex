@@ -143,3 +143,32 @@ list_events() {
     }
   ' "$file"
 }
+
+# --- Wave 2 helpers (event-log append-only migration) ---
+
+# eio_project_dir
+# Public alias for _eio_project_dir (echoes the project root).
+eio_project_dir() {
+  _eio_project_dir
+}
+
+# eio_get_profile
+# Returns the active Cortex profile: minimal, standard (default), or strict.
+# Resolution: CORTEX_PROFILE env → $(_eio_cortex_dir)/profile.local first line → "standard".
+eio_get_profile() {
+  local profile="${CORTEX_PROFILE:-}"
+  if [ -z "$profile" ] && [ -f "$(_eio_cortex_dir)/profile.local" ]; then
+    profile=$(head -1 "$(_eio_cortex_dir)/profile.local" 2>/dev/null | tr -d '[:space:]')
+  fi
+  case "$profile" in
+    minimal|strict) echo "$profile" ;;
+    *) echo "standard" ;;
+  esac
+}
+
+# eio_item_hash <text>
+# Echoes the cksum CRC of the whitespace-trimmed text.
+eio_item_hash() {
+  local text="$1"
+  printf '%s' "$text" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | cksum | awk '{print $1}'
+}

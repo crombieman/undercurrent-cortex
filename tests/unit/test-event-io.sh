@@ -124,4 +124,26 @@ resolve_event_log '{"no_sid":"here"}'
 assert_eq "write_resolution_never_uses_marker" "" "$EVENT_LOG"
 unset CORTEX_PROJECT_DIR_OVERRIDE
 
+# --- eio_project_dir / eio_get_profile / eio_item_hash (wave 2) ---
+TDIR4=$(mktemp -d)
+CORTEX_PROJECT_DIR_OVERRIDE="$TDIR4"
+assert_eq "eio_project_dir_override" "$TDIR4" "$(eio_project_dir)"
+
+mkdir -p "$TDIR4/.claude/cortex"
+assert_eq "profile_default_standard" "standard" "$(eio_get_profile)"
+printf 'strict\n' > "$TDIR4/.claude/cortex/profile.local"
+assert_eq "profile_from_file" "strict" "$(eio_get_profile)"
+printf 'bogus\n' > "$TDIR4/.claude/cortex/profile.local"
+assert_eq "profile_invalid_falls_back" "standard" "$(eio_get_profile)"
+CORTEX_PROFILE="minimal"
+assert_eq "profile_env_wins" "minimal" "$(eio_get_profile)"
+unset CORTEX_PROFILE
+unset CORTEX_PROJECT_DIR_OVERRIDE
+
+h1=$(eio_item_hash "  fix the thing  ")
+h2=$(eio_item_hash "fix the thing")
+assert_eq "item_hash_trims_whitespace" "$h1" "$h2"
+is_num=no; case "$h1" in ''|*[!0-9]*) : ;; *) is_num=yes ;; esac
+assert_eq "item_hash_numeric" "yes" "$is_num"
+
 end_suite
