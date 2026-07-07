@@ -11,10 +11,15 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Run test suite
         run: bash tests/run-all.sh
-        timeout-minutes: 5
+        shell: bash
+        timeout-minutes: 25
