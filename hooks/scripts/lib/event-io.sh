@@ -25,11 +25,14 @@ resolve_event_log() {
   local json="${1:-}" sid=""
   EVENT_LOG=""
   if [ -n "$json" ]; then
+    # || true inside each substitution: jq/python3 exit non-zero on malformed
+    # JSON, and under the callers' set -euo pipefail a failing assignment kills
+    # the whole hook (contract violation: hooks always exit 0 with JSON).
     if command -v jq >/dev/null 2>&1; then
-      sid=$(printf '%s' "$json" | jq -r '.session_id // empty' 2>/dev/null)
+      sid=$(printf '%s' "$json" | jq -r '.session_id // empty' 2>/dev/null || true)
     fi
     if [ -z "$sid" ] && command -v python3 >/dev/null 2>&1; then
-      sid=$(printf '%s' "$json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null)
+      sid=$(printf '%s' "$json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null || true)
     fi
     if [ -z "$sid" ]; then
       local tmp="${json#*\"session_id\":\"}"

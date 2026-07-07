@@ -149,4 +149,12 @@ assert_eq "item_hash_numeric" "yes" "$is_num"
 # --- normalize_path (copied verbatim from state-io.sh, wave 2 task 2) ---
 assert_eq "normalize_backslash_drive" "C:/Users/x" "$(normalize_path 'c:\Users\x')"
 
+# --- resolve_event_log: malformed JSON must not crash under errexit ---
+# jq/python3 reject the input; the extraction substitutions must swallow the
+# parser failure (hooks contract: always exit 0). Run in a fresh errexit shell
+# so the failure propagates exactly as it would in a real hook script.
+rc=0; out=$(bash -c 'set -euo pipefail; source "$1"; resolve_event_log "not valid json {{{"; printf "%s" "$EVENT_LOG"' _ "$PLUGIN_ROOT/hooks/scripts/lib/event-io.sh") || rc=$?
+assert_eq "resolve_malformed_json_no_crash" "0" "$rc"
+assert_eq "resolve_malformed_json_empty_log" "" "$out"
+
 end_suite

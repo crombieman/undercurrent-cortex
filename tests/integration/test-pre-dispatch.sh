@@ -168,4 +168,22 @@ json=$(mock_json "tool_name=Write" "session_id=pd-test" \
 result=$(run_pre_dispatch "$json")
 assert_eq "tdd_guard_skips_non_src_paths" "{}" "$result"
 
+# Test 16: Missing event log (session_id present, no log file on disk) still
+# routes to sub-handlers — routing is the dispatcher's job regardless of state.
+# Mirrors test-post-dispatch.sh's missing_event_log_still_routes_to_handlers.
+setup_test
+json=$(mock_json "tool_name=Write" "session_id=pd-noeventlog" \
+  "tool_input.file_path=supabase/migrations/074_test.sql" \
+  "tool_input.content=CREATE INDEX idx ON t (id) WHERE d > CURRENT_DATE")
+result=$(run_pre_dispatch "$json")
+assert_contains "missing_event_log_still_routes_to_handlers" "$result" "deny"
+
+# Test 17: Malformed JSON on stdin — hooks contract: exit 0 with {} (never crash).
+# Regression for resolve_event_log's jq/python3 extraction failing under errexit.
+setup_test
+rc=0
+result=$(echo 'not valid json {{{' | bash "$SANDBOX/hooks/scripts/pre-dispatch.sh" 2>/dev/null) || rc=$?
+assert_eq "malformed_json_exit_zero" "0" "$rc"
+assert_eq "malformed_json_returns_empty" "{}" "$result"
+
 end_suite
