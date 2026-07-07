@@ -7,91 +7,133 @@ source "$TESTS_DIR/lib/fixtures.sh"
 source "$TESTS_DIR/lib/mock-commands.sh"
 
 PLUGIN_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-source "$PLUGIN_ROOT/hooks/scripts/lib/state-io.sh"
+source "$PLUGIN_ROOT/hooks/scripts/lib/event-io.sh"
 
 begin_suite "post-bash-dispatch"
 
-# Create sandbox once for the suite
-SANDBOX=$(setup_script_sandbox "$_TEST_TMPDIR")
+# Real git repo in the sandbox — commit-recency guard reads actual git log
+# timestamps, so a mocked git (fixed canned output) can't exercise it.
+git -C "$_TEST_TMPDIR" init -q
+git -C "$_TEST_TMPDIR" config user.email "test@cortex.local"
+git -C "$_TEST_TMPDIR" config user.name "Cortex Test"
 
-# Helper: run post-bash-dispatch with given command
-# Uses mock git to control commit message for conventional commit check.
+# Helper: run post-bash-dispatch directly (no sandbox needed — event-io resolves
+# the project dir lazily via CORTEX_PROJECT_DIR_OVERRIDE, unlike state-io's
+# source-time PROJECT_DIR assignment; see test-post-edit-dispatch.sh).
 run_post_bash() {
-  local sid="$1" command_str="$2" mock_behavior="${3:-clean}"
-  # Create mock journal so commit logging does not fail
+  local sid="$1" command_str="$2"
+  # Journal must pre-exist — the hook only appends to it, never creates it
+  # (session-start owns creation in production).
   mkdir -p "$_TEST_TMPDIR/memory"
   echo "# Journal" > "$_TEST_TMPDIR/memory/$(date +%Y-%m-%d).md"
-  # Mock git so journal commit-message extraction works
-  local mock_bin
-  mock_bin=$(setup_mock_path "$_TEST_TMPDIR")
-  create_mock_git "$mock_bin" "$mock_behavior"
   local json
   json=$(mock_json "session_id=$sid" "tool_input.command=$command_str")
-  echo "$json" | bash "$SANDBOX/hooks/scripts/post-bash-dispatch.sh" 2>/dev/null || true
-  restore_path
+  echo "$json" | CORTEX_PROJECT_DIR_OVERRIDE="$_TEST_TMPDIR" \
+    bash "$PLUGIN_ROOT/hooks/scripts/post-bash-dispatch.sh" 2>/dev/null || true
 }
 
-# Test 1: git commit increments commits_count
-setup_test
-create_state_file "$_TEST_TMPDIR/.claude" "commit-inc" "commits_count=2" > /dev/null
-run_post_bash "commit-inc" "git commit -m feat-test" > /dev/null
-sf="$_TEST_TMPDIR/.claude/cortex/sessions/test-week/commit-inc.local.md"
-result=$(grep '^commits_count=' "$sf" | cut -d= -f2 | tr -d '\r')
-assert_eq "commit_increments_count" "3" "$result"
+# make_commit <message> [epoch_offset_seconds]
+# Creates a real, empty commit in the sandbox repo. offset shifts the author/
+# committer date away from "now" — pass a large negative number to simulate a
+# stale commit for the recency guard.
+make_commit() {
+  local message="$1" offset="${2:-0}"
+  local ts=$(( $(date +%s) + offset ))
+  GIT_AUTHOR_DATE="@${ts}" GIT_COMMITTER_DATE="@${ts}" \
+    git -C "$_TEST_TMPDIR" commit -q --allow-empty -m "$message"
+}
 
-# Test 2: Commit resets edits_since_last_commit to 0
+# Test 1: npm test appends a test_run event
 setup_test
-create_state_file "$_TEST_TMPDIR/.claude" "commit-reset" "edits_since_last_commit=8" > /dev/null
-run_post_bash "commit-reset" "git commit -m fix-bug" > /dev/null
-sf="$_TEST_TMPDIR/.claude/cortex/sessions/test-week/commit-reset.local.md"
-result=$(grep '^edits_since_last_commit=' "$sf" | cut -d= -f2 | tr -d '\r')
-assert_eq "commit_resets_edits" "0" "$result"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "test-npm")
+run_post_bash "test-npm" "npm test" > /dev/null
+result=$(list_events test_run "$LOG")
+assert_contains "npm_test_appends_test_run_event" "$result" "vitest"
 
-# Test 3: Commit resets stop_hook_active and consecutive_blocks
+# Test 2: npx vitest also appends a test_run event
 setup_test
-create_state_file "$_TEST_TMPDIR/.claude" "commit-flags" "stop_hook_active=true" "consecutive_blocks=2" > /dev/null
-run_post_bash "commit-flags" "git commit -m chore-cleanup" > /dev/null
-sf="$_TEST_TMPDIR/.claude/cortex/sessions/test-week/commit-flags.local.md"
-stop_result=$(grep '^stop_hook_active=' "$sf" | cut -d= -f2 | tr -d '\r')
-consec_result=$(grep '^consecutive_blocks=' "$sf" | cut -d= -f2 | tr -d '\r')
-assert_eq "commit_resets_stop_hook" "false" "$stop_result"
-assert_eq "commit_resets_consecutive" "0" "$consec_result"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "test-vitest")
+run_post_bash "test-vitest" "npx vitest run" > /dev/null
+result=$(list_events test_run "$LOG")
+assert_contains "npx_vitest_appends_test_run_event" "$result" "vitest"
 
-# Test 4: git commit --amend does NOT increment
+# Test 3: test command with no resolvable event log doesn't crash
 setup_test
-create_state_file "$_TEST_TMPDIR/.claude" "amend-test" "commits_count=5" "edits_since_last_commit=3" > /dev/null
-run_post_bash "amend-test" "git commit --amend" > /dev/null
-sf="$_TEST_TMPDIR/.claude/cortex/sessions/test-week/amend-test.local.md"
-result=$(grep '^commits_count=' "$sf" | cut -d= -f2 | tr -d '\r')
-assert_eq "amend_does_not_increment" "5" "$result"
+result=$(run_post_bash "notest-log" "npm test")
+assert_eq "test_command_without_event_log_returns_empty" "{}" "$result"
 
-# Test 5: npm test sets tests_run=true
+# Test 4: non-git, non-test command returns {}
 setup_test
-create_state_file "$_TEST_TMPDIR/.claude" "test-run" "tests_run=false" > /dev/null
-run_post_bash "test-run" "npm test" > /dev/null
-sf="$_TEST_TMPDIR/.claude/cortex/sessions/test-week/test-run.local.md"
-result=$(grep '^tests_run=' "$sf" | cut -d= -f2 | tr -d '\r')
-assert_eq "npm_test_sets_flag" "true" "$result"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "npm-install")
+result=$(run_post_bash "npm-install" "npm install lodash")
+assert_eq "non_git_non_test_command_returns_empty" "{}" "$result"
 
-# Test 6: Conventional commit - no warning, but journal nudge (mock git returns "feat: test commit message")
+# Test 5: git commit appends a commit event whose value carries sha + subject
 setup_test
-create_state_file "$_TEST_TMPDIR/.claude" "conv-ok" "commits_count=0" > /dev/null
-result=$(run_post_bash "conv-ok" "git commit -m test")
-# Conventional commits still get a journal context-note nudge (not a warning)
-assert_contains "conventional_commit_no_warn" "$result" "Commit logged"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "commit-fresh" \
+  "1700000001|commit|abc1234 feat: prior commit")
+make_commit "feat: add fresh commit"
+sha=$(git -C "$_TEST_TMPDIR" rev-parse --short HEAD)
+run_post_bash "commit-fresh" "git commit -m feat-test" > /dev/null
+result=$(list_events commit "$LOG")
+count=$(count_events commit '' '' "$LOG")
+assert_eq "commit_event_count_increments" "2" "$count"
+assert_contains "commit_event_has_short_sha" "$result" "$sha"
+assert_contains "commit_event_has_subject" "$result" "feat: add fresh commit"
 
-# Test 7: npx vitest also sets tests_run=true
+# Test 6: git commit --amend does not append a commit event (existing count unchanged)
 setup_test
-create_state_file "$_TEST_TMPDIR/.claude" "vitest-run" "tests_run=false" > /dev/null
-run_post_bash "vitest-run" "npx vitest run" > /dev/null
-sf="$_TEST_TMPDIR/.claude/cortex/sessions/test-week/vitest-run.local.md"
-result=$(grep '^tests_run=' "$sf" | cut -d= -f2 | tr -d '\r')
-assert_eq "vitest_sets_flag" "true" "$result"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "commit-amend" \
+  "1700000001|commit|abc1234 feat: prior commit")
+make_commit "feat: pre-amend base"
+result=$(run_post_bash "commit-amend" "git commit --amend")
+after=$(count_events commit '' '' "$LOG")
+assert_eq "amend_does_not_append_commit_event" "1" "$after"
+assert_eq "amend_returns_empty_response" "{}" "$result"
 
-# Test 8: Non-git command returns {}
+# Test 7: conventional commit message — no warning, but journal context nudge
 setup_test
-create_state_file "$_TEST_TMPDIR/.claude" "npm-cmd" "commits_count=0" > /dev/null
-result=$(run_post_bash "npm-cmd" "npm install lodash")
-assert_eq "non_git_returns_empty" "{}" "$result"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "commit-conventional")
+make_commit "feat: conventional commit message"
+result=$(run_post_bash "commit-conventional" "git commit -m test")
+assert_contains "conventional_commit_no_warning" "$result" "Commit logged"
+assert_not_contains "conventional_commit_no_warning_text" "$result" "Non-conventional"
+
+# Test 8: non-conventional commit message triggers the format warning
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "commit-nonconventional")
+make_commit "just a plain commit message"
+result=$(run_post_bash "commit-nonconventional" "git commit -m test")
+assert_contains "non_conventional_commit_warns" "$result" "Non-conventional commit"
+
+# Test 9: commit logging appends a line to the daily journal
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "commit-journal")
+make_commit "fix: journal logging test"
+run_post_bash "commit-journal" "git commit -m test" > /dev/null
+journal="$_TEST_TMPDIR/memory/$(date +%Y-%m-%d).md"
+assert_file_contains "journal_logs_commit_message" "$journal" "commit: fix: journal logging test"
+
+# Test 10: stale HEAD (commit older than 60s) skips the commit event, but the
+# journal write + systemMessage flow still runs (mapping-table resolution)
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "commit-stale" \
+  "1700000001|commit|abc1234 feat: prior commit")
+make_commit "chore: stale commit" -1000
+result=$(run_post_bash "commit-stale" "git commit -m test")
+after=$(count_events commit '' '' "$LOG")
+assert_eq "stale_commit_skips_event" "1" "$after"
+assert_contains "stale_commit_still_prompts" "$result" "Commit logged"
+journal="$_TEST_TMPDIR/memory/$(date +%Y-%m-%d).md"
+assert_file_contains "stale_commit_journal_still_written" "$journal" "stale commit"
+
+# Test 11: missing event log (no session log on disk) still journals + prompts —
+# journal/systemMessage are document writes and advisory messages, not state.
+setup_test
+make_commit "docs: no session log test"
+result=$(run_post_bash "commit-no-log" "git commit -m test")
+assert_contains "missing_event_log_still_prompts" "$result" "Commit logged"
+journal="$_TEST_TMPDIR/memory/$(date +%Y-%m-%d).md"
+assert_file_contains "missing_event_log_journal_written" "$journal" "no session log test"
 
 end_suite
