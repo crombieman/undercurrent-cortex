@@ -31,4 +31,16 @@ assert_contains "escape_combined" "$result" 'say \"hi\"'
 result=$(escape_for_json '')
 assert_eq "escape_empty_string" '' "$result"
 
+# --- C0 control-character stripping (T7, v4 wave 0) ---
+result=$(escape_for_json "$(printf 'a\001b\013c\037d')")   # SOH, VT, US
+assert_eq "control_chars_stripped" "abcd" "$result"
+
+result=$(escape_for_json $'x\ty\nz')                        # tab/newline still escape
+assert_eq "control_strip_preserves_escapes" 'x\ty\nz' "$result"
+
+result=$(escape_for_json "$(printf 'q\002w "quoted" \\ back\007')")
+rc=0
+printf '{"m":"%s"}' "$result" | python3 -c 'import sys,json; json.load(sys.stdin)' 2>/dev/null || rc=$?
+assert_eq "control_output_parses_as_json" "0" "$rc"
+
 end_suite
