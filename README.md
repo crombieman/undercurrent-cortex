@@ -315,7 +315,7 @@ Premortem, Show the Math, Source Evidence, Success Criteria, Blast Radius, Lesso
 
 **44 gates** organized into 3 sequential phases (Understanding → Evaluation → Holistic), covering: silent failures, data integrity, security, migrations, math, caching, frontend, architecture, estimates, validation depth, documentation, commit strategy, quality, references, lessons, decisions, journal, data source provenance, resource modeling, verification fidelity, idempotency, race conditions, partial failure, cardinality, observability, freshness contracts, upstream stability, implicit coupling, downstream impact, rollback safety, environment divergence, attack surface, monotonicity, calendar awareness, type coercion, success criteria, blast radius, premortem, invariant preservation, precedent check, ripple effects, AI-ism detection, and product-value alignment.
 
-Gate definitions live in `context/plan-audit-gates.md`. AI-ism taxonomy (122 patterns) in `context/ai-ism-taxonomy.md`. Meta-principles and research evidence in `context/plan-audit-reference.md`.
+Gate definitions live in `context/plan-audit-gates.md`. AI-ism taxonomy (87 patterns + 8 anti-patterns) in `context/ai-ism-taxonomy.md`. Meta-principles and research evidence in `context/plan-audit-reference.md`.
 
 ### 7 Hook Events
 
@@ -329,19 +329,21 @@ Gate definitions live in `context/plan-audit-gates.md`. AI-ism taxonomy (122 pat
 | PreCompact | bootstrap | pre-compact.sh | Preserve carry-over |
 | SessionEnd | bootstrap | session-end-dispatch.sh | Health metrics, domain tag, cross-session tracking |
 
-### 3 Agents
+### 4 Agents
 
 | Agent | What | Invoke |
 |-------|------|--------|
 | conversation-analyzer | Detects correction patterns across sessions, proposes evolution rules | `/analyze-session` |
 | deep-dive | Exhaustive research with browser, hypothesis-driven methodology, strategic reports | `/deep-dive <topic>` |
 | code-reviewer | 3-pass code review (bug/logic, security, conventions) with confidence scoring >=80 | `/code-review` |
+| memory-synthesis | Curates collaboration patterns and workflows — dedup, merge, staleness flags, index sync | `/curate-memory` |
 
-### 9 Commands
+### 10 Commands
 
 | Command | What it does |
 |---------|-------------|
 | `/status` | Display the organism statusline — session activity, health pulse, lessons absorbed, pending mutations |
+| `/curate-memory` | Run the memory-synthesis agent — curate collaboration patterns, workflows, and file organization |
 | `/session-end` | Write journal entry, carry-over, reasoning audit, health metrics |
 | `/deep-dive <topic>` | Launch exhaustive research — produces a comprehensive written report |
 | `/analyze-session` | Deep adaptive immunity scan (triggered by corrections or reasoning misses) |
@@ -365,9 +367,9 @@ All state files live in `.claude/cortex/` (gitignored):
 | `cortex/current-session.id` | Pointer to active session state file (ensures correct resolution) |
 | `cortex/profile.local` | Hook profile override (minimal/standard/strict) |
 
-### 11 Context Files
+### 12 Context Files
 
-7 keyword-injected files (via `context-flow.sh`) + 3 plan-audit reference files (loaded on demand via `@context/`) + 1 index.
+8 keyword-injected files (via `context-flow.sh`) + 3 plan-audit reference files (loaded on demand via `@context/`) + 1 index.
 
 **Keyword-injected** (auto-discovery via `keywords:` frontmatter):
 
@@ -380,13 +382,14 @@ All state files live in `.claude/cortex/` (gitignored):
 | python-patterns.md | python, pyproject.toml, pytest, django, flask, fastapi, poetry, ruff, mypy |
 | go-patterns.md | golang, go.mod, goroutine, cobra, fiber |
 | rust-patterns.md | rustc, cargo.toml, lifetime, tokio, serde, clippy, rust-lang |
+| synthesis-memory.md | collaboration pattern, workflow pattern, synthesis |
 
 **Plan-audit reference** (loaded via `@context/` when plan-audit skill fires):
 
 | File | Contents |
 |------|----------|
 | plan-audit-gates.md | Full 44-gate catalog with all checklist questions |
-| ai-ism-taxonomy.md | 122 AI-ism patterns, 8 anti-patterns with code examples, detection heuristics |
+| ai-ism-taxonomy.md | 87 AI-ism patterns, 8 anti-patterns with code examples, detection heuristics |
 | plan-audit-reference.md | 15 meta-principles, cognitive bias mitigations, gaming countermeasures, cross-domain research evidence |
 
 **Index:** `_index.md` — master index of keyword-injected context files
@@ -425,8 +428,8 @@ To create a domain pack:
 ```text
 tests/
   run-all.sh                              # Test runner
-  unit/                                   # 4 tests — state-io, json-extract, escape-json, validate-organism
-  integration/                            # 18 tests — one per hook script + profiles + migration v3.7
+  unit/                                   # 5 tests — state-io, json-extract, escape-json, validate-organism, lint-antipatterns
+  integration/                            # 17 tests — one per hook script + profiles + migration v3.7
   edge/                                   # 2 tests — empty stdin, Windows paths
   regression/                             # 2 tests — health dedup, pipefail glob
   lib/                                    # 3 shared helpers — fixtures, mocks, test framework
@@ -480,7 +483,7 @@ cortex/
 
 ## Version History
 
-- **3.13.2** — Plan-audit v1.0: layered 44-gate architecture (was 18 flat gates). Irreducible Core (3 questions on every plan). Killer 7 universal gates. Risk-tiered depth (Tier S/A/B/C). 26 new gates covering idempotency, race conditions, partial failure, blast radius, observability, type coercion, and more. 5 existing gates enhanced (mandatory arithmetic, source evidence, data exposure, staleness windows, full-universe scaling). 3 new context files: `plan-audit-gates.md` (44 gate definitions), `ai-ism-taxonomy.md` (122 patterns + 8 anti-patterns), `plan-audit-reference.md` (15 meta-principles + research evidence).
+- **3.13.2** — Plan-audit v1.0: layered 44-gate architecture (was 18 flat gates). Irreducible Core (3 questions on every plan). Killer 7 universal gates. Risk-tiered depth (Tier S/A/B/C). 26 new gates covering idempotency, race conditions, partial failure, blast radius, observability, type coercion, and more. 5 existing gates enhanced (mandatory arithmetic, source evidence, data exposure, staleness windows, full-universe scaling). 3 new context files: `plan-audit-gates.md` (44 gate definitions), `ai-ism-taxonomy.md` (87 patterns + 8 anti-patterns; earlier README versions misstated 122), `plan-audit-reference.md` (15 meta-principles + research evidence).
 - **3.12.1** — Session-start statusline now displays model metadata (model name, reasoning effort, context window) as a third line.
 - **3.12.0** — Fix TDD guard deny format (strict mode was silently broken — wrong JSON format for Claude Code hook API). Sync all documentation counts and versions. Fix 5 stale references from v3.7 migration. Add missing version frontmatter to graph and validate-refs skills. Clarify superpowers as optional integration.
 - **3.11.0** — Memory enforcement: plan-audit gates 16-18 (lessons surfaced, decision pre-capture, journal pre-entry). Stop-gate Gate 7 (decision capture after plan-mode sessions). Decision journal integration with context-flow. 18-gate plan-audit (was 13).

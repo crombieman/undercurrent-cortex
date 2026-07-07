@@ -28,9 +28,9 @@ Claude Code plugin — session management, health tracking, context injection, a
 - `hooks/scripts/` — All hook dispatch and handler scripts
 - `hooks/scripts/lib/` — Shared libraries (state-io, escape-json, json-extract, validate-organism)
 - `skills/` — SKILL.md files with YAML frontmatter (16 skills)
-- `agents/` — Agent .md files with system prompts (3 agents)
-- `commands/` — Slash command .md files (9 commands)
-- `context/` — Auto-discovered context files with `keywords:` frontmatter (7 files)
+- `agents/` — Agent .md files with system prompts (4 agents)
+- `commands/` — Slash command .md files (10 commands)
+- `context/` — Auto-discovered context files with `keywords:` frontmatter (8 keyword-injected of 12 total)
 - `tests/` — Bash test suite
 
 ### Hook Dispatch
