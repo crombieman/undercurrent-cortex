@@ -100,4 +100,28 @@ printf '|||\n' >> "$EVENT_LOG"
 assert_eq "malformed_skipped_crlf_counted" "1" "$(count_events file_edit)"
 assert_eq "crlf_value_clean" "r C:/crlf.ts" "$(last_event file_edit)"
 
+# --- embedded pipes AND CRLF on the same line (interaction) ---
+EVENT_LOG=$(create_event_log "$TDIR/.claude" "s-pipecrlf")
+printf '1700000010|carry_over|fix a|b handling\r\n' >> "$EVENT_LOG"
+assert_eq "pipes_plus_crlf_value" "fix a|b handling" "$(last_event carry_over)"
+assert_eq "pipes_plus_crlf_list" "fix a|b handling" "$(list_events carry_over)"
+
+# --- resolve_event_log: pretty-printed JSON (spaces/newlines around keys) ---
+TDIR3=$(mktemp -d)
+f3=$(create_event_log "$TDIR3/.claude" "sid-pretty")
+CORTEX_PROJECT_DIR_OVERRIDE="$TDIR3"
+resolve_event_log "$(printf '{\n  "session_id": "sid-pretty",\n  "tool_name": "Bash"\n}')"
+assert_eq "resolve_pretty_json" "$f3" "$EVENT_LOG"
+
+# --- resolve_event_log_readonly: falls back to current-session.id for reads ---
+mkdir -p "$TDIR3/.claude/cortex"
+printf 'sid-pretty\n' > "$TDIR3/.claude/cortex/current-session.id"
+resolve_event_log_readonly '{"no_sid":"here"}'
+assert_eq "readonly_falls_back_to_marker" "$f3" "$EVENT_LOG"
+
+# --- resolve_event_log (write path): does NOT use the marker fallback ---
+resolve_event_log '{"no_sid":"here"}'
+assert_eq "write_resolution_never_uses_marker" "" "$EVENT_LOG"
+unset CORTEX_PROJECT_DIR_OVERRIDE
+
 end_suite

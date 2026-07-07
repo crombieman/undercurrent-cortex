@@ -72,12 +72,14 @@ resolve_event_log_readonly() {
   fi
 }
 
-# append_event <type> <value> [file]
-# The ONLY write primitive in the hook path. Log must already exist
-# (session-start creates it): makes mid-session opt-in inert and blocks
-# writes in un-opted repos even past a broken gate.
+# append_event <type> <value>
+# The ONLY write primitive in the hook path. Writes go to $EVENT_LOG exclusively —
+# no file parameter, so call sites can't route writes past resolve_event_log
+# (spec §3.4: appends require session_id-based resolution; the readonly resolver
+# is for read surfaces only). Log must already exist (session-start creates it):
+# makes mid-session opt-in inert and blocks writes in un-opted repos.
 append_event() {
-  local type="$1" value="${2:-}" file="${3:-$EVENT_LOG}"
+  local type="$1" value="${2:-}" file="$EVENT_LOG"
   [ -n "$file" ] || return 0
   [ -f "$file" ] || return 0
   value="${value//$'\r'/}"

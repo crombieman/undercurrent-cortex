@@ -431,7 +431,7 @@ tests/
   unit/                                   # 6 tests — state-io, json-extract, escape-json, validate-organism, lint-antipatterns, event-io
   integration/                            # 17 tests — one per hook script + profiles + migration v3.7
   edge/                                   # 2 tests — empty stdin, Windows paths
-  regression/                             # 2 tests — health dedup, pipefail glob
+  regression/                             # 3 tests — health dedup, pipefail glob, concurrent appends
   lib/                                    # 3 shared helpers — fixtures, mocks, test framework
 ```
 
@@ -473,9 +473,9 @@ cortex/
         state-io.sh                        # read_field/write_field/read_section/append_to_section
         validate-organism.sh               # Healing system: 9 self-repair checks
   skills/             # 16 skill directories
-  commands/           # 9 slash commands
-  agents/             # conversation-analyzer + deep-dive + code-reviewer
-  context/            # 11 context files (7 keyword-matched + 3 plan-audit reference + 1 index)
+  commands/           # 10 slash commands
+  agents/             # conversation-analyzer + deep-dive + code-reviewer + memory-synthesis
+  context/            # 12 context files (8 keyword-matched + 3 plan-audit reference + 1 index)
   tests/              # 28 test scripts + 3 helpers (run-all.sh)
 ```
 

@@ -16,7 +16,7 @@ log=$(create_event_log "$tdir/.claude" "s-conc")
 # 50 SEPARATE processes (distinct PIDs — faithful to real async hook fires).
 # The v3 read-modify-write path scored 4/50 on this exact scenario (proven 2026-07-06).
 for i in $(seq 1 50); do
-  bash -c 'source "$1"; append_event tool_call "Bash" "$2"' _ "$EIO" "$log" &
+  bash -c 'source "$1"; EVENT_LOG="$2"; append_event tool_call "Bash"' _ "$EIO" "$log" &
 done
 wait
 
