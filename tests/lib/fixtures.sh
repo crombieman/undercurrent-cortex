@@ -4,6 +4,24 @@
 
 PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
+# create_event_log <claude_dir> <session_id> [event-lines...]
+# Creates a v4 append-only event log in the test-week bucket.
+# <claude_dir> is the fake .claude dir (same convention as create_state_file).
+# Extra args are appended verbatim (caller supplies full "epoch|type|value" lines).
+# Echoes the log path.
+create_event_log() {
+  local dir="$1" sid="$2"
+  shift 2
+  mkdir -p "$dir/cortex/sessions/test-week"
+  local file="$dir/cortex/sessions/test-week/${sid}.events.log"
+  printf '%s|session_start|2026-03-14T00:00:00Z test-model\n' "1700000000" > "$file"
+  local line
+  for line in "$@"; do
+    printf '%s\n' "$line" >> "$file"
+  done
+  echo "$file"
+}
+
 # create_state_file <dir> <session_id> [overrides...]
 # Creates a well-formed state file. Overrides: "field=value" pairs.
 # Returns the file path.
