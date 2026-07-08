@@ -221,5 +221,28 @@ set -e
 assert_eq "header_only_health_exit_0" "0" "$rc"
 assert_json_valid "header_only_health_valid_json" "$result"
 
+# --- Test 15 (Commit 2): carry_over_age counts only logs with surviving items ---
+# Log A carries item X (age 4) but X is addressed in log B; log B also carries a
+# fresh unaddressed item Y (age 0). The new age must derive from Y's log (0+1=1),
+# NOT bleed A's stale age (would give 5). Y resurfaces, X does not.
+setup_test
+sid="ss-age-survivors"
+xitem="- Stale addressed item aaa"
+xhash=$(eio_item_hash "$xitem")
+yitem="- Fresh surviving item bbb"
+create_event_log "$_TEST_TMPDIR/.claude" "age-A" \
+  "1700000100|carry_over|$xitem" \
+  "1700000101|carry_over_age|4" > /dev/null
+create_event_log "$_TEST_TMPDIR/.claude" "age-B" \
+  "1700000200|carry_addressed|$xhash" \
+  "1700000201|carry_over|$yitem" \
+  "1700000202|carry_over_age|0" > /dev/null
+result=$(run_session_start "$(mock_json "session_id=$sid")")
+NEW_LOG="$(_eio_week_dir)/${sid}.events.log"
+new_items=$(list_events carry_over "$NEW_LOG")
+assert_eq "age_counts_only_surviving_logs" "1" "$(last_event carry_over_age "$NEW_LOG")"
+assert_contains "fresh_item_survives" "$new_items" "Fresh surviving item bbb"
+assert_not_contains "stale_addressed_item_suppressed" "$new_items" "Stale addressed item aaa"
+
 export PATH="$SAVED_PATH"
 end_suite

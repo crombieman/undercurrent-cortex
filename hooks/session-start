@@ -112,9 +112,14 @@ done
 # carry_addressed hashes across prior logs FIRST (hashes are content-based, so
 # an item addressed in a DIFFERENT log still reconciles), then keep only items
 # whose hash is unaddressed. 30-day recency filter is by file mtime.
+# Per-log (items, age) are stashed so the age max can be computed AFTER the
+# addressed union is known — a log's age only counts if one of ITS items survives
+# reconciliation (else a fully-addressed stale log would bleed its age onto fresh
+# items and false-block stop-gate Gate 5).
 event_all_items=""
 event_all_addressed=""
-event_carry_age="0"
+declare -a _elog_items=()
+declare -a _elog_age=()
 cutoff_epoch=$(date -d "30 days ago" +%s 2>/dev/null || date -v-30d +%s 2>/dev/null || echo "0")
 for f in "$(_eio_sessions_dir)"/*/*.events.log; do
   [ -f "$f" ] || continue
@@ -132,9 +137,8 @@ for f in "$(_eio_sessions_dir)"/*/*.events.log; do
   age=$(last_event carry_over_age "$f")
   age="${age:-0}"
   case "$age" in *[!0-9]*) age=0 ;; esac
-  if [ "$age" -gt "$event_carry_age" ]; then
-    event_carry_age="$age"
-  fi
+  _elog_items+=("$items")
+  _elog_age+=("$age")
 done
 
 # Set-difference: event items whose content hash is not in the addressed union.
@@ -147,6 +151,31 @@ if [ -n "$event_all_items" ]; then
     fi
   done <<< "$event_all_items"
 fi
+
+# Age max, second pass: include a log's age ONLY if at least one of its own
+# carry_over items survives reconciliation (hash not in the addressed union).
+event_carry_age="0"
+_elog_n=${#_elog_age[@]}
+_elog_i=0
+while [ "$_elog_i" -lt "$_elog_n" ]; do
+  _li="${_elog_items[$_elog_i]}"
+  _la="${_elog_age[$_elog_i]}"
+  _survives=0
+  if [ -n "$_li" ]; then
+    while IFS= read -r _it; do
+      [ -z "$_it" ] && continue
+      _ih=$(eio_item_hash "$_it")
+      if ! printf '%s\n' "$event_all_addressed" | grep -qxF "$_ih"; then
+        _survives=1
+        break
+      fi
+    done <<< "$_li"
+  fi
+  if [ "$_survives" -eq 1 ] && [ "$_la" -gt "$event_carry_age" ]; then
+    event_carry_age="$_la"
+  fi
+  _elog_i=$((_elog_i + 1))
+done
 
 # Filter merged carry-over: only keep lines that look like actual items (not raw
 # journal content). Valid: "- ", "* ", "TODO", "[carry-over]", "[mid-session pin]".
