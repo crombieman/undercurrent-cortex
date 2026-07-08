@@ -51,6 +51,7 @@ if ! python3 - "$SETTINGS_FILE" <<'PYEOF'
 import json
 import sys
 import os
+import tempfile
 
 settings_path = sys.argv[1]
 old_settings_path = os.environ.get("OLD_SETTINGS", "")
@@ -75,13 +76,31 @@ def is_cortex_hook(h):
 
 
 def remove_cortex_bootstrap(hook_list):
-    """Remove all cortex hook entries from an event's hook list.
+    """Remove all cortex hook entries from an event's hook-group list.
     Matches entries with _cortex_bootstrap marker OR entries whose command
-    contains a known cortex hook script name (catches unmarked orphans)."""
+    contains a known cortex hook script name (catches unmarked orphans).
+
+    Type-guarded end to end (I-4): a group that isn't a dict, or whose "hooks"
+    key isn't a list, is passed through UNTOUCHED rather than AttributeError-ing
+    on a malformed settings.json — one bad group must not abort cleanup of the
+    rest of the file (or the other settings file)."""
+    cleaned = []
     for group in hook_list:
-        group["hooks"] = [h for h in group.get("hooks", []) if not is_cortex_hook(h)]
-    # Remove empty groups
-    return [g for g in hook_list if g.get("hooks")]
+        if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
+            # Not the shape we manage — leave it exactly as-is.
+            cleaned.append(group)
+            continue
+        group["hooks"] = [
+            h for h in group["hooks"]
+            if not (isinstance(h, dict) and is_cortex_hook(h))
+        ]
+        cleaned.append(group)
+    # Drop only the groups WE emptied (dict + list "hooks" that is now []).
+    # Non-dict / non-list-hooks groups are always preserved.
+    return [
+        g for g in cleaned
+        if not (isinstance(g, dict) and isinstance(g.get("hooks"), list) and not g["hooks"])
+    ]
 
 
 def clean_settings(path, label):
@@ -107,15 +126,33 @@ def clean_settings(path, label):
         with open(path, 'r', encoding='utf-8') as f:
             settings = json.load(f)
 
-        hooks = settings.get("hooks")
-        if not hooks:
+        # Type-guard every level (I-4): a settings doc that isn't an object, or
+        # whose "hooks" isn't a dict (e.g. `"hooks": []`, a string, null), has
+        # nothing we manage — skip this file, never AttributeError-abort.
+        if not isinstance(settings, dict):
             return 0
+        hooks = settings.get("hooks")
+        if not isinstance(hooks, dict):
+            return 0
+
+        def _count_entries(groups):
+            # Only dict groups with a list "hooks" contribute counted entries;
+            # everything else is opaque to us and counts as zero.
+            return sum(
+                len(g["hooks"]) for g in groups
+                if isinstance(g, dict) and isinstance(g.get("hooks"), list)
+            )
 
         removed = 0
         for event in list(hooks.keys()):
-            before_entries = sum(len(g.get("hooks", [])) for g in hooks[event])
-            cleaned = remove_cortex_bootstrap(hooks[event])
-            after_entries = sum(len(g.get("hooks", [])) for g in cleaned)
+            groups = hooks[event]
+            # An event value that isn't a group LIST (string, dict, null) is not
+            # the shape we manage — skip it untouched.
+            if not isinstance(groups, list):
+                continue
+            before_entries = _count_entries(groups)
+            cleaned = remove_cortex_bootstrap(groups)
+            after_entries = _count_entries(cleaned)
             removed += before_entries - after_entries
             if cleaned:
                 hooks[event] = cleaned
@@ -128,9 +165,36 @@ def clean_settings(path, label):
         if not hooks:
             del settings["hooks"]
 
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(settings, f, indent=2, ensure_ascii=False)
-            f.write('\n')
+        # A user who made their settings file read-only has opted out of edits.
+        # Skip (return 0, file untouched) rather than replace it — os.replace()
+        # renames over a read-only target if the DIR is writable, so a plain
+        # atomic write would otherwise silently overwrite it. Global cleanup on
+        # a different, writable file is unaffected and still counted.
+        if not os.access(path, os.W_OK):
+            return 0
+
+        # Atomic write (I-5): serialize to a temp file in the SAME directory
+        # (so os.replace is an atomic same-filesystem rename), fsync it durable,
+        # then replace. A crash mid-write leaves the ORIGINAL intact instead of
+        # a truncated settings.json.
+        dir_name = os.path.dirname(path) or "."
+        fd, tmp_path = tempfile.mkstemp(prefix=".bootstrap-hooks.", suffix=".tmp", dir=dir_name)
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, indent=2, ensure_ascii=False)
+                f.write('\n')
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)
+        except OSError:
+            # Write/replace failed — clean up the temp file and report nothing
+            # cleaned for THIS file (its original is untouched). An earlier
+            # successful clean_settings() call's result is unaffected.
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            return 0
         return removed
     except (json.JSONDecodeError, OSError):
         return 0

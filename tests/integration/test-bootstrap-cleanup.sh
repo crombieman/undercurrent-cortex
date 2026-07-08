@@ -610,4 +610,145 @@ while IFS=$'\t' read -r name status detail; do
   assert_eq "$name" "PASS" "$actual"
 done <<< "$orphan_results"
 
+# ============================================================================
+# Test 9 (I-4 type safety): "hooks" is an ARRAY, not an object. Nothing we
+# manage — exit 0, file left byte-identical (no crash, no rewrite churn).
+# ============================================================================
+setup_test
+HOME9="$_TEST_TMPDIR/home9"
+PROJ9="$_TEST_TMPDIR/proj9"
+mkdir -p "$HOME9/.claude" "$PROJ9"
+SETTINGS9="$HOME9/.claude/settings.json"
+printf '{"hooks":[],"otherKey":"keep"}' > "$SETTINGS9"
+cp "$SETTINGS9" "$SETTINGS9.orig"
+
+ec=$(run_bootstrap "$HOME9" "$PROJ9")
+assert_eq "hooks_array_exit_code" "0" "$ec"
+hooks_array_result="changed"
+cmp -s "$SETTINGS9" "$SETTINGS9.orig" && hooks_array_result="identical"
+assert_eq "hooks_array_untouched" "identical" "$hooks_array_result"
+
+# ============================================================================
+# Test 10 (I-4 type safety): an event VALUE is a string (not a group list),
+# alongside a well-formed cortex-tagged event. Pre-fix, iterating the string as
+# a group list AttributeError-aborts the whole python run — the good event is
+# never cleaned. Post-fix: the string event is skipped untouched, the cortex
+# event is still removed, file stays valid JSON, exit 0.
+# ============================================================================
+setup_test
+HOME10="$_TEST_TMPDIR/home10"
+PROJ10="$_TEST_TMPDIR/proj10"
+mkdir -p "$HOME10/.claude" "$PROJ10"
+SETTINGS10="$HOME10/.claude/settings.json"
+cat > "$SETTINGS10" <<'JSON'
+{
+  "hooks": {
+    "PreToolUse": "not-a-list",
+    "Stop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "_cortex_bootstrap": true,
+            "type": "command",
+            "command": "bash \"/plugin/hooks/scripts/stop-gate.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}
+JSON
+
+ec=$(run_bootstrap "$HOME10" "$PROJ10")
+assert_eq "event_string_exit_code" "0" "$ec"
+
+event_string_results=$(SETTINGS_JSON_PATH="$SETTINGS10" python3 <<'PYEOF'
+import json, os
+path = os.environ["SETTINGS_JSON_PATH"]
+lines = []
+def report(name, ok, detail=""):
+    lines.append(f"{name}\t{'PASS' if ok else 'FAIL'}\t{detail}")
+try:
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    report("event_string_valid_json", True)
+except Exception as e:  # noqa: BLE001
+    report("event_string_valid_json", False, str(e))
+    for l in lines: print(l)
+    raise SystemExit(0)
+hooks = data.get("hooks", {})
+report("event_string_malformed_event_preserved", hooks.get("PreToolUse") == "not-a-list", str(hooks.get("PreToolUse")))
+report("event_string_cortex_event_removed", "Stop" not in hooks, str(hooks.get("Stop")))
+for l in lines: print(l)
+PYEOF
+)
+while IFS=$'\t' read -r name status detail; do
+  [ -z "$name" ] && continue
+  actual="$status"
+  [ "$status" != "PASS" ] && [ -n "$detail" ] && actual="${status}: ${detail}"
+  assert_eq "$name" "PASS" "$actual"
+done <<< "$event_string_results"
+
+# ============================================================================
+# Test 11 (I-4 type safety): a GROUP is a bare string (not a dict) in the same
+# event as a well-formed cortex-tagged group. Pre-fix, `g.get("hooks")` on the
+# string AttributeError-aborts. Post-fix: the string group is passed through
+# untouched, the cortex group is emptied+dropped, file stays valid JSON.
+# ============================================================================
+setup_test
+HOME11="$_TEST_TMPDIR/home11"
+PROJ11="$_TEST_TMPDIR/proj11"
+mkdir -p "$HOME11/.claude" "$PROJ11"
+SETTINGS11="$HOME11/.claude/settings.json"
+cat > "$SETTINGS11" <<'JSON'
+{
+  "hooks": {
+    "Stop": [
+      "not-a-dict-group",
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "_cortex_bootstrap": true,
+            "type": "command",
+            "command": "bash \"/plugin/hooks/scripts/stop-gate.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}
+JSON
+
+ec=$(run_bootstrap "$HOME11" "$PROJ11")
+assert_eq "group_string_exit_code" "0" "$ec"
+
+group_string_results=$(SETTINGS_JSON_PATH="$SETTINGS11" python3 <<'PYEOF'
+import json, os
+path = os.environ["SETTINGS_JSON_PATH"]
+lines = []
+def report(name, ok, detail=""):
+    lines.append(f"{name}\t{'PASS' if ok else 'FAIL'}\t{detail}")
+try:
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    report("group_string_valid_json", True)
+except Exception as e:  # noqa: BLE001
+    report("group_string_valid_json", False, str(e))
+    for l in lines: print(l)
+    raise SystemExit(0)
+hooks = data.get("hooks", {})
+stop = hooks.get("Stop")
+report("group_string_preserved_and_cortex_removed", stop == ["not-a-dict-group"], json.dumps(stop))
+for l in lines: print(l)
+PYEOF
+)
+while IFS=$'\t' read -r name status detail; do
+  [ -z "$name" ] && continue
+  actual="$status"
+  [ "$status" != "PASS" ] && [ -n "$detail" ] && actual="${status}: ${detail}"
+  assert_eq "$name" "PASS" "$actual"
+done <<< "$group_string_results"
+
 end_suite

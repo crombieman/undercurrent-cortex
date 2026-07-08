@@ -157,5 +157,64 @@ while IFS= read -r entry; do
 done <<< "$NEW_ENTRIES"
 assert_eq "old_scripts_no_unexpected_new_files" "" "$UNEXPECTED_NEW_FILES"
 
+# ============================================================================
+# UPGRADED-PROJECT overlap (Codex I-5): an ALREADY-v4 project that ALSO still
+# carries a leftover legacy v3 *.local.md state file (a realistic mid-upgrade
+# shape) — run the OTHER three archived stop/end/compact scripts (the write-
+# heavy ones state-io.sh backs) against it. These v3 scripts legitimately write
+# v3 artifacts (health.local.md, cross-session.local.md, stop-gate-counter,
+# .migrated-v3.7) off the legacy state file — that's expected v3 behavior in
+# the overlap window, so this block does NOT assert a byte-frozen tree. It pins
+# the boundary that actually matters for v4 correctness: the v4 EVENT LOG is
+# byte-unchanged and NO new *.events.log file is ever created (the archived
+# tree has no append_event / resolve_event_log — it cannot touch event logs).
+# ============================================================================
+setup_test
+UPROJ="$_TEST_TMPDIR/uproj"
+UHOME="$_TEST_TMPDIR/uhome"
+mkdir -p "$UHOME"
+USID_LOG="oc-up-eventlog"
+USID_STATE="oc-up-legacy"
+ULOG=$(create_event_log "$UPROJ/.claude" "$USID_LOG")     # v4 event log + sentinel
+create_state_file "$UPROJ/.claude" "$USID_STATE" > /dev/null  # leftover v3 *.local.md
+create_journal "$UPROJ" "$(date +%Y-%m-%d)"                # gives session-end a PROJECT_DIR/memory
+
+ULOG_BEFORE=$(cat "$ULOG")
+EVENTLOG_COUNT_BEFORE=$(find "$UPROJ/.claude" -name '*.events.log' 2>/dev/null | wc -l | tr -d ' ')
+
+# resolve_state_file (v3) keys off the legacy .local.md, so pass its sid.
+u_json_stop=$(mock_json "session_id=$USID_STATE")
+set +e
+u_out_stop=$(run_old "stop-gate" "$UPROJ" "$UHOME" "$u_json_stop")
+u_rc_stop=$?
+set -e
+assert_eq "upgraded_old_stop_gate_exit_0" "0" "$u_rc_stop"
+assert_json_valid "upgraded_old_stop_gate_valid_json" "$u_out_stop"
+
+u_json_end=$(mock_json "session_id=$USID_STATE")
+set +e
+u_out_end=$(run_old "session-end-dispatch" "$UPROJ" "$UHOME" "$u_json_end")
+u_rc_end=$?
+set -e
+assert_eq "upgraded_old_session_end_exit_0" "0" "$u_rc_end"
+assert_json_valid "upgraded_old_session_end_valid_json" "$u_out_end"
+
+u_json_compact=$(mock_json "session_id=$USID_STATE")
+set +e
+u_out_compact=$(run_old "pre-compact" "$UPROJ" "$UHOME" "$u_json_compact")
+u_rc_compact=$?
+set -e
+assert_eq "upgraded_old_pre_compact_exit_0" "0" "$u_rc_compact"
+assert_json_valid "upgraded_old_pre_compact_valid_json" "$u_out_compact"
+
+# Boundary 1: the v4 event log is byte-for-byte unchanged.
+ULOG_AFTER=$(cat "$ULOG")
+assert_eq "upgraded_old_scripts_event_log_byte_unchanged" "$ULOG_BEFORE" "$ULOG_AFTER"
+
+# Boundary 2: no NEW *.events.log created anywhere (count stays exactly 1).
+EVENTLOG_COUNT_AFTER=$(find "$UPROJ/.claude" -name '*.events.log' 2>/dev/null | wc -l | tr -d ' ')
+assert_eq "upgraded_old_scripts_event_log_count_unchanged" "$EVENTLOG_COUNT_BEFORE" "$EVENTLOG_COUNT_AFTER"
+assert_eq "upgraded_old_scripts_no_new_event_log" "1" "$EVENTLOG_COUNT_AFTER"
+
 export PATH="$SAVED_PATH"
 end_suite
