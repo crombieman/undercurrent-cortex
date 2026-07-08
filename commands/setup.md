@@ -7,7 +7,17 @@ description: Initialize a project workspace with Cortex skeleton files and verif
 
 Initialize a project workspace for Cortex. Idempotent — safe to run multiple times. Never overwrites existing files.
 
+**Setup is the opt-in act**: Cortex hooks are inert in every project until this command creates the activation sentinel (step 0). Un-opted repos get zero state files and zero hook behavior.
+
 ## Steps
+
+### 0. Activate Cortex for this project (the opt-in sentinel)
+
+Check for `.claude/cortex/enabled`:
+- If present: report "Cortex already ACTIVATED for this project (since <first line's timestamp>)."
+- If missing: run
+  `mkdir -p .claude/cortex && printf 'enabled %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > .claude/cortex/enabled`
+  then report: "Cortex ACTIVATED for this project. **Start a new session** — hooks begin tracking at the next SessionStart (mid-session activation is inert by design)."
 
 ### 1. Detect environment
 
@@ -15,7 +25,7 @@ Run these checks and print findings:
 - `uname -a` — OS and architecture
 - `bash --version | head -1` — bash version
 - `git --version` — git version
-- `python3 --version 2>/dev/null || echo "python3 not found"` — python3 (needed for bootstrap)
+- `python3 --version 2>/dev/null || echo "python3 not found (optional)"` — python3 (optional — accelerates JSON parsing; pure-bash fallback covers everything)
 - `jq --version 2>/dev/null || echo "jq not found (optional)"` — jq (optional, used for JSON parsing)
 
 ### 2. Verify CLAUDE.md
@@ -42,7 +52,8 @@ For each item, report: "Created [file]" or "Already exists: [file]".
 
 Run: `bash "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/statusline.sh"`
 - If it produces output: display the statusline
-- If it fails: warn — "Statusline unavailable. Cortex hooks may not be bootstrapped yet. Start a new session to trigger bootstrap."
+- If it produces nothing and step 0 just created the sentinel: expected — the statusline has no session data until the next session starts. Report that.
+- If it fails outright: warn — "Statusline unavailable. Verify the plugin is installed (`claude plugins list`) and start a new session."
 
 ### 5. Display profile
 
