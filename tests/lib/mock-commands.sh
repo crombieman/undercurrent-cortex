@@ -5,17 +5,37 @@
 ORIGINAL_PATH=""
 
 # setup_mock_path <tmpdir>
-# Creates a mock bin directory and prepends it to PATH.
+# Creates a mock bin directory and prints its path. Does NOT modify PATH.
+#
+# Root cause of the old behavior's bug: it ran `export PATH=...` inside this
+# function, but every caller invokes it as `mock_bin=$(setup_mock_path ...)`
+# — a command substitution, which bash runs in a SUBSHELL. That subshell's
+# PATH mutation dies with the subshell; the caller's PATH is never touched.
+# hide_command's stub files land on disk correctly, but the "masked" command
+# stays fully resolvable via the caller's real, unmutated PATH — masked
+# tests silently exercise the REAL command instead of the stub and can pass
+# for the wrong reason (verified: on a box with a real python3 installed,
+# `mock_bin=$(setup_mock_path "$T"); hide_command "$mock_bin" python3` left
+# python3 fully resolvable afterward).
+#
+# Documented usage (mutate PATH in the CALLER's shell, not inside a
+# substitution):
+#   ORIGINAL_PATH="$PATH"
+#   mock_bin=$(setup_mock_path "$tmpdir")
+#   hide_command "$mock_bin" "jq"
+#   PATH="$mock_bin:$PATH"
+#   ... test code ...
+#   restore_path
 setup_mock_path() {
   local tmpdir="$1"
   local mock_bin="$tmpdir/mock-bin"
   mkdir -p "$mock_bin"
-  ORIGINAL_PATH="$PATH"
-  export PATH="$mock_bin:$PATH"
   echo "$mock_bin"
 }
 
 # restore_path
+# Restores PATH saved in ORIGINAL_PATH by the caller before it mutated PATH
+# (see setup_mock_path's documented usage pattern above).
 restore_path() {
   if [ -n "$ORIGINAL_PATH" ]; then
     export PATH="$ORIGINAL_PATH"
@@ -132,11 +152,33 @@ get_mock_calls() {
 # create_mock_date <mock_bin_dir> <day_of_year>
 # Creates a mock date that returns a specific day-of-year for +%j,
 # but passes through to real date for all other formats.
+#
+# Root cause of the old recursion bug: `which date` searches the CURRENT
+# $PATH. On the 2nd+ call within a suite, mock_bin is typically ALREADY
+# prepended to PATH (the caller applied it after the 1st create_mock_date
+# call) — so `which date` resolves to the FIRST mock's own script, which
+# gets baked into the regenerated script as ITS "real" passthrough target.
+# Any non-"+%j" invocation then execs the mock, which execs itself, forever
+# (verified: this actually forkbombed hundreds of orphaned bash processes in
+# testing — see task report).
+#
+# Fix: resolve via `command -v -p`, which searches a POSIX-guaranteed
+# DEFAULT path (not the current $PATH), so it can't resolve to mock_bin
+# regardless of call order or how many times mock_bin has been on PATH.
+# Falls back to a current-PATH search only if `-p` resolution is
+# unavailable, and explicitly rejects a self-referential result either way
+# — belt-and-suspenders against ever baking in a recursive reference.
 create_mock_date() {
   local mock_bin="$1"
   local day_of_year="$2"
   local real_date
-  real_date=$(which date 2>/dev/null || echo "/usr/bin/date")
+  real_date=$(command -v -p date 2>/dev/null || true)
+  if [ -z "$real_date" ] || [ "$real_date" = "$mock_bin/date" ]; then
+    real_date=$(which date 2>/dev/null || echo "/usr/bin/date")
+  fi
+  if [ "$real_date" = "$mock_bin/date" ]; then
+    real_date="/usr/bin/date"
+  fi
   cat > "$mock_bin/date" << MOCKEOF
 #!/usr/bin/env bash
 echo "date \$*" >> "$mock_bin/date.calls"

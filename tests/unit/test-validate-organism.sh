@@ -130,6 +130,39 @@ validate_organism >/dev/null 2>&1 || true
 result="present"; [ -d "$stray_dir" ] || result="removed"
 assert_eq "week_dir_pruning_skips_non_week_named_dirs" "present" "$result"
 
+# A symlink literally named like an ISO-week bucket (matches the pruning
+# loop's name-pattern guard) whose TARGET is some unrelated external
+# directory full of aged files must survive pruning untouched, and the
+# target's contents must not be touched either. Without a symlink check,
+# `find "$d" -mindepth 1 -maxdepth 1 -type f -delete` on a `$d` that is
+# actually a symlink follows it and deletes files INSIDE THE TARGET.
+# `ln -s` on Windows without Developer Mode / admin either fails outright or
+# (observed on this box) silently succeeds by copying the target instead of
+# creating a real symlink — `test -L` catches both: if it's not a real
+# symlink afterward, skip with a grep fallback proving the guard line exists.
+setup_test
+override_state_paths "$_TEST_TMPDIR"
+sym_target="$_TEST_TMPDIR/external-target"
+mkdir -p "$sym_target"
+echo "important" > "$sym_target/important.txt"
+touch -t "$OLD_TS" "$sym_target/important.txt"
+touch -t "$OLD_TS" "$sym_target"
+sym_path="$(_eio_sessions_dir)/2020-W02"
+ln -s "$sym_target" "$sym_path" 2>/dev/null || true
+if [ -L "$sym_path" ]; then
+  validate_organism >/dev/null 2>&1 || true
+  sym_result="present"; [ -L "$sym_path" ] || sym_result="removed"
+  assert_eq "week_dir_pruning_skips_symlinked_week_dir" "present" "$sym_result"
+  target_result="present"; [ -f "$sym_target/important.txt" ] || target_result="removed"
+  assert_eq "week_dir_pruning_symlink_target_untouched" "present" "$target_result"
+else
+  skip_test "week_dir_pruning_skips_symlinked_week_dir" "ln -s unavailable (no symlink privilege on this box)"
+  skip_test "week_dir_pruning_symlink_target_untouched" "ln -s unavailable (no symlink privilege on this box)"
+  guard_present="missing"
+  grep -qF '[ -L "$d" ] && continue' "$PLUGIN_ROOT/hooks/scripts/lib/validate-organism.sh" && guard_present="present"
+  assert_eq "week_dir_pruning_symlink_guard_line_exists" "present" "$guard_present"
+fi
+
 unset CORTEX_PROJECT_DIR_OVERRIDE
 
 end_suite

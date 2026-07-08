@@ -156,6 +156,12 @@ validate_organism() {
         d="${d%/}"
         # Never touch the current week dir.
         [ "$d" = "${wbd_current_week%/}" ] && continue
+        # Never follow a symlink standing in for a week dir. `[ -d "$d" ]`
+        # above resolves through symlinks, so a symlink named like an ISO
+        # week bucket would otherwise reach the delete/rmdir below and the
+        # `find ... -delete` would follow it straight into whatever external
+        # directory it points at.
+        [ -L "$d" ] && continue
         # Only ISO-week-named buckets (YYYY-WNN) are prunable — never stray
         # dirs (test fixtures, manual backups) that happen to live under
         # sessions/, no matter how old they are.

@@ -22,8 +22,20 @@ begin_suite() {
   _FAIL_COUNT=0
   _SKIP_COUNT=0
 
-  # Create isolated temp directory
-  _TEST_TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/cortex-test-XXXXXX")
+  # Create isolated temp directory. Priority: TEST_TMPDIR (explicit test-run
+  # override) > TMPDIR (standard env convention) > /tmp (default). If mktemp
+  # -d fails against that base entirely (no writable system temp dir at
+  # all — sandboxed CI, restricted container, a bogus override), fall back
+  # to a project-local .superpowers/tmp/ (created if needed) so the suite
+  # can still run instead of crashing under set -e before its first test.
+  local _base_tmpdir="${TEST_TMPDIR:-${TMPDIR:-/tmp}}"
+  _TEST_TMPDIR=$(mktemp -d "${_base_tmpdir}/cortex-test-XXXXXX" 2>/dev/null) || true
+  if [ -z "$_TEST_TMPDIR" ] || [ ! -d "$_TEST_TMPDIR" ]; then
+    local _fallback_dir
+    _fallback_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/.superpowers/tmp"
+    mkdir -p "$_fallback_dir"
+    _TEST_TMPDIR=$(mktemp -d "${_fallback_dir}/cortex-test-XXXXXX")
+  fi
 
   # Create mock project structure
   mkdir -p "$_TEST_TMPDIR/.claude"

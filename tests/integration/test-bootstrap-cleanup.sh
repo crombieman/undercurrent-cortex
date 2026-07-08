@@ -54,12 +54,15 @@ run_bootstrap() {
 
 # ============================================================================
 # Test 1: full fixture — 2 _cortex_bootstrap-tagged entries (PreToolUse +
-# PostToolUse, different events), 1 unmarked orphan naming stop-gate.sh
-# (Stop, alone in its group), 1 unrelated user hook sharing PreToolUse's
-# group with a tagged entry, 1 unrelated event (UserPromptSubmit) with only
-# user hooks. After cleanup: cortex entries gone, user hooks byte-identical
-# (parsed-JSON comparison), empty events (PostToolUse, Stop) removed, other
-# top-level settings keys preserved, file still valid JSON.
+# PostToolUse, different events), 1 unmarked orphan using the distinctive
+# /hooks/scripts/stop-gate.sh path segment (Stop, alone in its group; the
+# anchor Task 8 requires — see Test 8 below for the byte-basename case this
+# fixture used to use, which is now correctly NOT treated as an orphan), 1
+# unrelated user hook sharing PreToolUse's group with a tagged entry, 1
+# unrelated event (UserPromptSubmit) with only user hooks. After cleanup:
+# cortex entries gone, user hooks byte-identical (parsed-JSON comparison),
+# empty events (PostToolUse, Stop) removed, other top-level settings keys
+# preserved, file still valid JSON.
 # ============================================================================
 setup_test
 HOME1="$_TEST_TMPDIR/home1"
@@ -108,7 +111,7 @@ cat > "$SETTINGS1" <<'JSON'
         "hooks": [
           {
             "type": "command",
-            "command": "bash /some/other/path/stop-gate.sh"
+            "command": "bash \"/other/plugin/hooks/scripts/stop-gate.sh\""
           }
         ]
       }
@@ -423,5 +426,188 @@ while IFS=$'\t' read -r name status detail; do
   [ "$status" != "PASS" ] && [ -n "$detail" ] && actual="${status}: ${detail}"
   assert_eq "$name" "PASS" "$actual"
 done <<< "$legacy_results"
+
+# ============================================================================
+# Test 7: chmod-readonly legacy settings.local.json — the WRITE (not just the
+# read+parse) must be inside clean_settings()'s try/except. Pre-fix, a write
+# failure (PermissionError from a read-only file) propagates UNCAUGHT out of
+# the embedded python3 script, crashing it with a non-zero exit AFTER the
+# global settings.json has ALREADY been cleaned successfully — so bash's
+# `if ! python3 ...; then echo "...nothing cleaned"; fi` fallback message
+# ends up LYING (something WAS cleaned). Detects whether chmod 444 actually
+# blocks writes on this filesystem first (Windows ACL semantics vary) and
+# skips with a reason if not, per task brief.
+# ============================================================================
+setup_test
+HOME7="$_TEST_TMPDIR/home7"
+PROJ7="$_TEST_TMPDIR/proj7"
+mkdir -p "$HOME7/.claude" "$PROJ7/.claude"
+SETTINGS7="$HOME7/.claude/settings.json"
+cat > "$SETTINGS7" <<'JSON'
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "_cortex_bootstrap": true,
+            "type": "command",
+            "command": "bash \"/plugin/hooks/scripts/pre-dispatch.sh\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
+JSON
+
+OLDSETTINGS7="$PROJ7/.claude/settings.local.json"
+cat > "$OLDSETTINGS7" <<'JSON'
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "_cortex_bootstrap": true,
+            "type": "command",
+            "command": "bash \"/plugin/hooks/scripts/stop-gate.sh\"",
+            "async": false
+          }
+        ]
+      }
+    ]
+  }
+}
+JSON
+cp "$OLDSETTINGS7" "$OLDSETTINGS7.orig"
+chmod 444 "$OLDSETTINGS7"
+
+readonly_took_effect=no
+( : > "$OLDSETTINGS7" ) 2>/dev/null || readonly_took_effect=yes
+# Restore in case the probe write above actually went through despite chmod.
+cp "$OLDSETTINGS7.orig" "$OLDSETTINGS7" 2>/dev/null || true
+chmod 444 "$OLDSETTINGS7" 2>/dev/null || true
+
+if [ "$readonly_took_effect" = "yes" ]; then
+  ec=$(run_bootstrap "$HOME7" "$PROJ7")
+  assert_eq "readonly_legacy_exit_code" "0" "$ec"
+
+  global_result=$(SETTINGS_JSON_PATH="$SETTINGS7" python3 <<'PYEOF'
+import json, os
+path = os.environ["SETTINGS_JSON_PATH"]
+data = json.load(open(path, encoding="utf-8"))
+print("clean" if "hooks" not in data else "dirty")
+PYEOF
+)
+  assert_eq "readonly_legacy_global_still_cleaned" "clean" "$global_result"
+
+  legacy_result="changed"
+  chmod 644 "$OLDSETTINGS7" 2>/dev/null || true
+  cmp -s "$OLDSETTINGS7" "$OLDSETTINGS7.orig" && legacy_result="identical"
+  assert_eq "readonly_legacy_untouched" "identical" "$legacy_result"
+
+  stderr_log="$_TEST_TMPDIR/last-stderr.log"
+  lies="no"
+  grep -qF "nothing cleaned" "$stderr_log" 2>/dev/null && lies="yes"
+  assert_eq "readonly_legacy_no_lying_message" "no" "$lies"
+
+  mentions_global="no"
+  grep -qF "settings.json" "$stderr_log" 2>/dev/null && mentions_global="yes"
+  assert_eq "readonly_legacy_stderr_reports_global_cleanup" "yes" "$mentions_global"
+else
+  chmod 644 "$OLDSETTINGS7" 2>/dev/null || true
+  skip_test "readonly_legacy_exit_code" "chmod 444 did not block writes on this filesystem"
+  skip_test "readonly_legacy_global_still_cleaned" "chmod 444 did not block writes on this filesystem"
+  skip_test "readonly_legacy_untouched" "chmod 444 did not block writes on this filesystem"
+  skip_test "readonly_legacy_no_lying_message" "chmod 444 did not block writes on this filesystem"
+  skip_test "readonly_legacy_stderr_reports_global_cleanup" "chmod 444 did not block writes on this filesystem"
+fi
+
+# ============================================================================
+# Test 8: orphan matching anchored to the `/hooks/scripts/<name>` path
+# segment, not the bare script basename. Pre-fix, `name in cmd` substring
+# matching means a user's OWN hook that merely happens to be named the same
+# as a cortex script (e.g. `bash ~/my-tools/stop-gate.sh`) gets swept up and
+# deleted right alongside the real cortex entries. Fixture: 3 hooks sharing
+# one Stop-event group — (1) a TAGGED cortex entry, (2) an UNMARKED orphan
+# cortex entry using the distinctive hooks/scripts/ path (simulates a stale
+# pre-Task-5 injection whose marker never got written), (3) the user's own
+# hook at ~/my-tools/stop-gate.sh. Expect: (1) and (2) removed, (3) survives
+# byte-identical.
+# ============================================================================
+setup_test
+HOME8="$_TEST_TMPDIR/home8"
+PROJ8="$_TEST_TMPDIR/proj8"
+mkdir -p "$HOME8/.claude" "$PROJ8"
+SETTINGS8="$HOME8/.claude/settings.json"
+cat > "$SETTINGS8" <<'JSON'
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "_cortex_bootstrap": true,
+            "type": "command",
+            "command": "bash \"/plugin/hooks/scripts/stop-gate.sh\"",
+            "async": false
+          },
+          {
+            "type": "command",
+            "command": "bash \"/other/plugin/hooks/scripts/stop-gate.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash ~/my-tools/stop-gate.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+JSON
+
+ec=$(run_bootstrap "$HOME8" "$PROJ8")
+assert_eq "orphan_anchor_exit_code" "0" "$ec"
+
+orphan_results=$(SETTINGS_JSON_PATH="$SETTINGS8" python3 <<'PYEOF'
+import json
+import os
+
+path = os.environ["SETTINGS_JSON_PATH"]
+lines = []
+
+
+def report(name, ok, detail=""):
+    lines.append(f"{name}\t{'PASS' if ok else 'FAIL'}\t{detail}")
+
+
+with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+hooks = data.get("hooks", {})
+stop_groups = hooks.get("Stop", [])
+
+report("orphan_stop_single_group", len(stop_groups) == 1, f"got {len(stop_groups)} groups")
+survivors = stop_groups[0].get("hooks", []) if stop_groups else []
+report("orphan_user_hook_survives", len(survivors) == 1, f"got {len(survivors)} hooks: {survivors}")
+EXPECTED_USER_HOOK = {"type": "command", "command": "bash ~/my-tools/stop-gate.sh"}
+if survivors:
+    report("orphan_user_hook_byte_identical", survivors[0] == EXPECTED_USER_HOOK, json.dumps(survivors[0]))
+
+for l in lines:
+    print(l)
+PYEOF
+)
+while IFS=$'\t' read -r name status detail; do
+  [ -z "$name" ] && continue
+  actual="$status"
+  [ "$status" != "PASS" ] && [ -n "$detail" ] && actual="${status}: ${detail}"
+  assert_eq "$name" "PASS" "$actual"
+done <<< "$orphan_results"
 
 end_suite

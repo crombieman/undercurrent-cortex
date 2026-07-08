@@ -33,9 +33,16 @@ load_extract
 result=$(echo '{"path":"src/lib/scoring:v11.ts"}' | extract_json_field "path")
 assert_eq "extract_field_with_special_chars" "src/lib/scoring:v11.ts" "$result"
 
+# Genuinely mask jq AND python3 so extract_json_field can only reach tier 3
+# (bash/awk). setup_mock_path only PRINTS the mock dir — PATH must be
+# mutated here, in this shell, not inside the `$(...)` that captures it (a
+# command substitution runs in a subshell; a PATH export there never reaches
+# the caller). See mock-commands.sh's setup_mock_path doc comment.
+ORIGINAL_PATH="$PATH"
 mock_bin=$(setup_mock_path "$_TEST_TMPDIR")
 hide_command "$mock_bin" "jq"
 hide_command "$mock_bin" "python3"
+PATH="$mock_bin:$PATH"
 
 load_extract
 result=$(echo '{"session_id":"fallback-test"}' | extract_json_field "session_id")
@@ -56,15 +63,12 @@ assert_eq "extract_from_large_json" "found" "$result"
 restore_path
 
 # --- Tier-3 pretty-JSON tolerance (Codex I-3): jq/python3 shadowed with
-# functions that fail closed (return 127) rather than mock-commands.sh's
-# setup_mock_path/hide_command. That helper exports PATH from inside the
-# $(...) command substitution used to capture its echoed mock-bin path — i.e.
-# inside a subshell — so the mutation never reaches this caller (verified: on
-# a box with a real python3 installed, `mock_bin=$(setup_mock_path ...);
-# hide_command "$mock_bin" python3` leaves python3 fully resolvable
-# afterward). The masked tests above/below only prove the bash fallback VALUE
-# is correct, not that tier 3 alone produced it, whenever a real python3 is
-# on PATH — jq's absence on this dev box was hiding that gap. See task report.
+# functions that fail closed (return 127) instead of mock-commands.sh's
+# setup_mock_path/hide_command. Both approaches are equally valid masking
+# strategies now that setup_mock_path's PATH-mutation-in-a-subshell bug is
+# fixed (see above and task report) — this block keeps direct function
+# shadowing since it was never affected by that bug and needs no PATH
+# save/restore bookkeeping.
 jq() { return 127; }
 python3() { return 127; }
 export -f jq python3
@@ -78,8 +82,10 @@ result=$(printf '{\n  "tool_input": {\n    "file_path": "src/pretty.ts"\n  }\n}'
 assert_eq "extract_tier3_pretty_nested" "src/pretty.ts" "$result"
 unset -f jq python3
 
+ORIGINAL_PATH="$PATH"
 mock_bin=$(setup_mock_path "$_TEST_TMPDIR")
 hide_command "$mock_bin" "jq"
+PATH="$mock_bin:$PATH"
 
 if command -v python3 >/dev/null 2>&1; then
   load_extract

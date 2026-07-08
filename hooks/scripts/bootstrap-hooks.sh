@@ -67,7 +67,13 @@ def is_cortex_hook(h):
     if h.get("_cortex_bootstrap"):
         return True
     cmd = h.get("command", "")
-    return any(name in cmd for name in CORTEX_SCRIPT_NAMES)
+    # Anchor to the cortex-distinctive "/hooks/scripts/<name>" path segment,
+    # not the bare script basename. A bare-name substring match (the old
+    # behavior) also matches a user's OWN hook that merely happens to share
+    # a name with a cortex script, e.g. `bash ~/my-tools/stop-gate.sh` —
+    # that command contains the substring "stop-gate.sh" but was never
+    # ours, and cleanup-only hygiene must never delete a user's hook.
+    return any(f"/hooks/scripts/{name}" in cmd for name in CORTEX_SCRIPT_NAMES)
 
 
 def remove_cortex_bootstrap(hook_list):
@@ -84,40 +90,52 @@ def clean_settings(path, label):
     """Remove cortex entries from a settings file. Returns the count of
     individual hook entries removed. Never touches a file it can't parse or
     that doesn't exist — cleanup-only means no fresh-{} recreation (that was
-    injection-era behavior) and no directory/file creation."""
+    injection-era behavior) and no directory/file creation.
+
+    The read, the in-memory edit, AND the write all live inside one
+    try/except. A prior version only wrapped the read+parse — a write
+    failure (e.g. PermissionError from a read-only settings.local.json) then
+    propagated UNCAUGHT out of this function, crashing the whole embedded
+    python3 script. When that happened on the SECOND clean_settings() call
+    (the legacy file) after the FIRST (the global file) had already
+    committed its write successfully, the caller's `python3 ... || echo
+    "nothing cleaned"` fallback printed a message that lied — something WAS
+    cleaned. Catching the write failure here lets this call return 0
+    (its own file genuinely left untouched) while the earlier successful
+    call's result is unaffected."""
     if not os.path.isfile(path):
         return 0
     try:
         with open(path, 'r', encoding='utf-8') as f:
             settings = json.load(f)
-    except (json.JSONDecodeError, IOError):
+
+        hooks = settings.get("hooks")
+        if not hooks:
+            return 0
+
+        removed = 0
+        for event in list(hooks.keys()):
+            before_entries = sum(len(g.get("hooks", [])) for g in hooks[event])
+            cleaned = remove_cortex_bootstrap(hooks[event])
+            after_entries = sum(len(g.get("hooks", [])) for g in cleaned)
+            removed += before_entries - after_entries
+            if cleaned:
+                hooks[event] = cleaned
+            else:
+                del hooks[event]
+
+        if removed == 0:
+            return 0
+
+        if not hooks:
+            del settings["hooks"]
+
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(settings, f, indent=2, ensure_ascii=False)
+            f.write('\n')
+        return removed
+    except (json.JSONDecodeError, OSError):
         return 0
-
-    hooks = settings.get("hooks")
-    if not hooks:
-        return 0
-
-    removed = 0
-    for event in list(hooks.keys()):
-        before_entries = sum(len(g.get("hooks", [])) for g in hooks[event])
-        cleaned = remove_cortex_bootstrap(hooks[event])
-        after_entries = sum(len(g.get("hooks", [])) for g in cleaned)
-        removed += before_entries - after_entries
-        if cleaned:
-            hooks[event] = cleaned
-        else:
-            del hooks[event]
-
-    if removed == 0:
-        return 0
-
-    if not hooks:
-        del settings["hooks"]
-
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump(settings, f, indent=2, ensure_ascii=False)
-        f.write('\n')
-    return removed
 
 
 removed_global = clean_settings(settings_path, "~/.claude/settings.json")

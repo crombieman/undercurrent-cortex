@@ -71,7 +71,15 @@ for tf in "${test_files[@]}"; do
   fi
 
   # Print output
-  if [ "$VERBOSE" = true ] || echo "$result" | grep -qF 'FAIL'; then
+  if [ -z "$summary_line" ]; then
+    # No SUITE line means the suite crashed before reaching end_suite — must
+    # never fall through to the "0 tests" branch below, which would render
+    # it as a green PASS even though it's counted as a failure above.
+    printf "  \033[31mCRASHED\033[0m  %s (no SUITE line)\n" "$suite_name"
+    if [ "$VERBOSE" = true ]; then
+      echo "$result"
+    fi
+  elif [ "$VERBOSE" = true ] || echo "$result" | grep -qF 'FAIL'; then
     echo "$result" | grep -v '^SUITE ' || true
   else
     if [ "${s_fail:-0}" -gt 0 ]; then
