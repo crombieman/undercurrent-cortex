@@ -4,7 +4,13 @@ set -euo pipefail
 # Called by context-flow.sh when user says "approve proposal" or "reject proposal".
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-source "$SCRIPT_DIR/lib/state-io.sh" || { echo "State I/O unavailable"; exit 0; }
+# event-io.sh (NOT state-io.sh): this handler only needs PROPOSALS_FILE.
+# state-io.sh runs migrate_state_files() at SOURCE time (mkdir sessions/, write
+# .migrated-v3.7) — sourcing it here would leak those side effects on every
+# proposal approve/reject (Codex I-1).
+source "$SCRIPT_DIR/lib/event-io.sh" || { echo "State I/O unavailable"; exit 0; }
+
+PROPOSALS_FILE="$(eio_proposals_file)"
 
 ACTION="${1:-approve}"  # approve or reject
 

@@ -2,9 +2,15 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-source "$SCRIPT_DIR/lib/state-io.sh" || { printf '{}'; exit 0; }
+# event-io.sh (NOT state-io.sh): this routed sub-handler only needs PROJECT_DIR.
+# state-io.sh runs migrate_state_files() at SOURCE time (mkdir sessions/, write
+# .migrated-v3.7) — sourcing it here would make mid-session opt-in leak side
+# effects even when this session has no event log (Codex I-1).
+source "$SCRIPT_DIR/lib/event-io.sh" || { printf '{}'; exit 0; }
 source "$SCRIPT_DIR/lib/json-extract.sh" || { printf '{}'; exit 0; }
 source "$SCRIPT_DIR/lib/escape-json.sh" || { printf '{}'; exit 0; }
+
+PROJECT_DIR="$(eio_project_dir)"
 
 # Buffer stdin
 input=$(cat)

@@ -24,14 +24,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
-# Source state-io for PROJECT_DIR (needed for legacy settings.local.json
-# cleanup only — no longer needed for command generation).
-source "$SCRIPT_DIR/lib/state-io.sh" 2>/dev/null || true
-
-# Fallback: derive PROJECT_DIR from git root
-if [ -z "${PROJECT_DIR:-}" ]; then
-  PROJECT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
-fi
+# PROJECT_DIR is needed ONLY to locate the legacy project-level
+# settings.local.json for cleanup. Derive it side-effect-free — do NOT source
+# state-io.sh, whose source-time migrate_state_files() would mkdir sessions/
+# and write .migrated-v3.7 as a side effect of what is now a cleanup-only
+# script (Codex I-3). Mirrors state-io.sh's own resolution order.
+PROJECT_DIR="${CORTEX_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo "")}"
 
 # Global settings — where the old injection used to land.
 SETTINGS_FILE="${HOME}/.claude/settings.json"

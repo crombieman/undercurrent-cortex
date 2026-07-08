@@ -13,11 +13,18 @@ begin_suite "apply-proposal"
 # Create sandbox once for the suite
 SANDBOX=$(setup_script_sandbox "$_TEST_TMPDIR")
 
+# setup_script_sandbox exports CORTEX_PROJECT_DIR internally, but that export
+# runs inside the $(...) subshell above and never reaches this shell. apply-
+# proposal.sh now derives PROPOSALS_FILE via event-io.sh's eio_proposals_file
+# (which resolves from CORTEX_PROJECT_DIR), so it must be set here explicitly —
+# same pattern as tests/integration/test-post-dispatch.sh. This lands the
+# resolved PROPOSALS_FILE at $_TEST_TMPDIR/.claude/cortex/proposals.local.md,
+# exactly where create_proposals_file writes below.
+export CORTEX_PROJECT_DIR="$_TEST_TMPDIR"
+
 # Helper: run apply-proposal with given action
 run_apply_proposal() {
   local action="${1:-approve}"
-  # Point PROPOSALS_FILE at the sandbox project dir
-  export PROPOSALS_FILE="$_TEST_TMPDIR/.claude/cortex/proposals.local.md"
   bash "$SANDBOX/hooks/scripts/apply-proposal.sh" "$action" 2>/dev/null || true
 }
 

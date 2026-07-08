@@ -2,7 +2,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-source "$SCRIPT_DIR/lib/state-io.sh" || { printf '{}'; exit 0; }
+# No state-io.sh source: this linter uses ONLY extract_json_field + escape_for_json
+# (it never touches PROJECT_DIR or any state-io constant). Sourcing state-io.sh
+# would run migrate_state_files() at SOURCE time (mkdir sessions/, write
+# .migrated-v3.7) — a side effect this pure content linter has no reason to
+# cause, and one that broke mid-session opt-in inertness (Codex I-1).
 source "$SCRIPT_DIR/lib/json-extract.sh" || { printf '{}'; exit 0; }
 source "$SCRIPT_DIR/lib/escape-json.sh" || { printf '{}'; exit 0; }
 
