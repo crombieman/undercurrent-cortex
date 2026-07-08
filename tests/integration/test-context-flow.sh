@@ -5,19 +5,37 @@ TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$TESTS_DIR/lib/test-framework.sh"
 source "$TESTS_DIR/lib/fixtures.sh"
 
+PLUGIN_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
+source "$PLUGIN_ROOT/hooks/scripts/lib/event-io.sh"
+
 begin_suite "context-flow"
 
 # Create sandbox once for the suite
 SANDBOX=$(setup_script_sandbox "$_TEST_TMPDIR")
 create_context_dir "$SANDBOX"
 
-# Helper: run context-flow with given user prompt
-run_context_flow() {
-  local prompt="$1" sid="${2:-ctx-test}"
-  create_state_file "$_TEST_TMPDIR/.claude" "$sid" > /dev/null
+# setup_script_sandbox exports CORTEX_PROJECT_DIR internally, but that export
+# runs inside the $(...) subshell above and never reaches this shell — event-io.sh
+# resolves the project dir from this env var at call time, so it must be set
+# here explicitly (pattern: tests/integration/test-post-dispatch.sh:22).
+export CORTEX_PROJECT_DIR="$_TEST_TMPDIR"
+
+# Helper: run context-flow with given user prompt and optional seed events
+# (event log is recreated fresh each call — "epoch|type|value" lines appended
+# after the fixture's default session_start line).
+run_context_flow_with_events() {
+  local prompt="$1" sid="$2"
+  shift 2
+  create_event_log "$_TEST_TMPDIR/.claude" "$sid" "$@" > /dev/null
   local json
   json=$(mock_json "user_prompt=$prompt" "session_id=$sid")
   echo "$json" | bash "$SANDBOX/hooks/scripts/context-flow.sh" 2>/dev/null || true
+}
+
+# Helper: run context-flow with given user prompt (no extra seed events)
+run_context_flow() {
+  local prompt="$1" sid="${2:-ctx-test}"
+  run_context_flow_with_events "$prompt" "$sid"
 }
 
 # Test 1: "scoring" injects scoring-architecture content
@@ -129,5 +147,26 @@ assert_contains "decision_keyword" "$result" "Decision detected"
 setup_test
 result=$(run_context_flow "done for today")
 assert_contains "session_end_reminder" "$result" "session-end"
+
+# --- Mode derivation: read_field "mode" -> last_event mode_set (first token, default normal) ---
+
+# Test 23: mode_set=cautious + edit-related prompt injects the cautious-mode warning
+setup_test
+result=$(run_context_flow_with_events "edit the auth handler" "ctx-cautious" \
+  "1700000001|mode_set|cautious")
+assert_contains "cautious_mode_injects_warning" "$result" "Cautious mode active"
+
+# Test 24: no mode_set event (default "normal") does NOT inject the cautious warning,
+# even for an edit-related prompt that would trigger it under cautious mode
+setup_test
+result=$(run_context_flow "edit the auth handler")
+assert_not_contains "default_mode_no_cautious_warning" "$result" "Cautious mode active"
+
+# Test 25: mode_set with trailing tokens ("cautious <reason>") still matches via
+# first-token extraction (${mode%% *})
+setup_test
+result=$(run_context_flow_with_events "fix the login bug" "ctx-cautious-reason" \
+  "1700000001|mode_set|cautious high-churn")
+assert_contains "cautious_mode_first_token_extraction" "$result" "Cautious mode active"
 
 end_suite

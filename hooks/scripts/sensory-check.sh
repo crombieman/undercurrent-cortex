@@ -3,17 +3,38 @@ set -euo pipefail
 # Sensory System — external awareness: remote commits, CI status, open PRs.
 # Called by session-start (full scan) and context-flow (mid-session with cooldown).
 # Outputs plain text (caller wraps in JSON).
+#
+# Usage: sensory-check.sh [--mid-session] [hook_json]
+# hook_json carries session_id for event-log resolution. session-start still
+# calls this without hook_json this wave (converted in a later task) — reads
+# degrade to the current-session.id marker fallback, and appends are skipped
+# entirely when no session_id can be resolved (spec §3.4: appends require an
+# attributable session).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-source "$SCRIPT_DIR/lib/state-io.sh" || exit 0
-
-# Resolve state file (no JSON input — finds best active session file)
-resolve_state_file ""
+source "$SCRIPT_DIR/lib/event-io.sh" || exit 0
 
 MID_SESSION=false
+HOOK_JSON=""
 if [ "${1:-}" = "--mid-session" ]; then
   MID_SESSION=true
+  HOOK_JSON="${2:-}"
+else
+  HOOK_JSON="${1:-}"
 fi
+
+# Resolve the write-target log strictly from session_id in hook_json (appends
+# require an attributable session — no marker fallback for writes).
+resolve_event_log "$HOOK_JSON"
+WRITE_LOG="$EVENT_LOG"
+
+# Resolve the read-target log — falls back to current-session.id when
+# hook_json carries no session_id, so cooldown/delta reads still work even
+# when this script is called without JSON (e.g. session-start this wave).
+resolve_event_log_readonly "$HOOK_JSON"
+READ_LOG="$EVENT_LOG"
+
+PROJECT_DIR="$(eio_project_dir)"
 
 # --- Non-interactive guard: never let git/gh block on an auth prompt ---
 # Root-cause fix for frozen SessionStart hooks: a stale GitHub token + Git
@@ -45,8 +66,8 @@ run_with_timeout() {
 }
 
 # --- Mid-session cooldown: skip if last check <5 min ago ---
-if [ "$MID_SESSION" = true ] && [ -f "$STATE_FILE" ]; then
-  last_check=$(read_field "last_sensory_check" "$STATE_FILE" 2>/dev/null || echo "")
+if [ "$MID_SESSION" = true ]; then
+  last_check=$(last_event sensory_check "$READ_LOG" 2>/dev/null || echo "")
   if [ -n "$last_check" ]; then
     # C-2 fix: replace ISO 8601 T separator with space for GNU date
     last_epoch=$(date -d "${last_check/T/ }" +%s 2>/dev/null || echo "0")
@@ -73,12 +94,13 @@ if command -v git >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; th
 
       # Track remote HEAD
       remote_head=$(git rev-parse "origin/${current_branch}" 2>/dev/null || echo "unknown")
-      if [ -f "$STATE_FILE" ]; then
-        last_remote=$(read_field "last_remote_head" "$STATE_FILE" 2>/dev/null || echo "")
-        if [ -n "$last_remote" ] && [ "$remote_head" != "$last_remote" ] && [ "$remote_head" != "unknown" ]; then
-          output="${output}Remote HEAD changed since last session (was: ${last_remote:0:7}, now: ${remote_head:0:7})."$'\n'
-        fi
-        write_field "last_remote_head" "$remote_head" "$STATE_FILE" 2>/dev/null || true
+      last_remote=$(last_event remote_head "$READ_LOG" 2>/dev/null || echo "")
+      if [ -n "$last_remote" ] && [ "$remote_head" != "$last_remote" ] && [ "$remote_head" != "unknown" ]; then
+        output="${output}Remote HEAD changed since last session (was: ${last_remote:0:7}, now: ${remote_head:0:7})."$'\n'
+      fi
+      if [ -n "$WRITE_LOG" ] && [ -f "$WRITE_LOG" ]; then
+        EVENT_LOG="$WRITE_LOG"
+        append_event "remote_head" "$remote_head"
       fi
     fi
   fi
@@ -94,8 +116,9 @@ if command -v gh >/dev/null 2>&1; then
       latest_name=$(echo "$ci_json" | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "unknown")
       output="${output}CI FAILED: ${latest_name}. Run: gh run list --limit 3"$'\n'
     fi
-    if [ -f "$STATE_FILE" ]; then
-      write_field "last_ci_status" "${latest_conclusion:-unknown}" "$STATE_FILE" 2>/dev/null || true
+    if [ -n "$WRITE_LOG" ] && [ -f "$WRITE_LOG" ]; then
+      EVENT_LOG="$WRITE_LOG"
+      append_event "ci_status" "${latest_conclusion:-unknown}"
     fi
   fi
 
@@ -129,9 +152,10 @@ if [ "$MID_SESSION" != true ]; then
   fi
 fi
 
-# Write timestamp
-if [ -f "$STATE_FILE" ]; then
-  write_field "last_sensory_check" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$STATE_FILE" 2>/dev/null || true
+# Write timestamp (skipped when no session_id was resolvable — write rule)
+if [ -n "$WRITE_LOG" ] && [ -f "$WRITE_LOG" ]; then
+  EVENT_LOG="$WRITE_LOG"
+  append_event "sensory_check" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fi
 
 # Output (plain text — caller wraps in JSON if needed)

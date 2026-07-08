@@ -6,23 +6,26 @@ set -euo pipefail
 # returns matching context file as systemMessage. First match wins.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-source "$SCRIPT_DIR/lib/state-io.sh" || { printf '{}'; exit 0; }
+source "$SCRIPT_DIR/lib/event-io.sh" || { printf '{}'; exit 0; }
 source "$SCRIPT_DIR/lib/json-extract.sh" || { printf '{}'; exit 0; }
 source "$SCRIPT_DIR/lib/escape-json.sh" || { printf '{}'; exit 0; }
 
 CONTEXT_DIR="$SCRIPT_DIR/../../context"
 
-# Read stdin JSON, resolve session-scoped state file, extract user_prompt
+# Read stdin JSON, resolve session-scoped event log, extract user_prompt
 INPUT=$(cat)
-resolve_state_file "$INPUT"
+resolve_event_log "$INPUT"
 PROMPT=$(printf '%s' "$INPUT" | extract_json_field "user_prompt")
 
 # Graceful degradation
 [ -z "$PROMPT" ] && { printf '{}'; exit 0; }
 
+PROJECT_DIR="$(eio_project_dir)"
+STATE_DIR="${PROJECT_DIR}/.claude"
+PROPOSALS_FILE="${STATE_DIR}/cortex/proposals.local.md"
+
 # Profile check for proposal handling (strict only)
-PROFILE=$(read_field "profile" "$STATE_FILE" 2>/dev/null || true)
-PROFILE="${PROFILE:-standard}"
+PROFILE=$(eio_get_profile)
 
 # Lowercase for case-insensitive matching
 PROMPT_LOWER=$(printf '%s' "$PROMPT" | tr '[:upper:]' '[:lower:]')
@@ -32,7 +35,9 @@ PADDED=" ${PROMPT_LOWER} "
 
 # --- Feedback Loop: cautious-mode injection ---
 CAUTIOUS_MSG=""
-mode=$(read_field "mode" "$STATE_FILE" 2>/dev/null || echo "normal")
+mode=$(last_event mode_set)
+mode="${mode%% *}"
+mode="${mode:-normal}"
 if [ "$mode" = "cautious" ]; then
   if [[ "$PROMPT_LOWER" == *"edit"* ]] || [[ "$PROMPT_LOWER" == *"fix"* ]] \
      || [[ "$PROMPT_LOWER" == *"add"* ]] || [[ "$PROMPT_LOWER" == *"implement"* ]] \
@@ -89,7 +94,7 @@ if [[ "$PADDED" == *" ci "* ]] || [[ "$PROMPT_LOWER" == *"pipeline status"* ]] \
   # Sensory system: mid-session external awareness check
   sensory_output=""
   if [ -x "$SCRIPT_DIR/sensory-check.sh" ]; then
-    sensory_output=$("$SCRIPT_DIR/sensory-check.sh" --mid-session 2>/dev/null || echo "")
+    sensory_output=$("$SCRIPT_DIR/sensory-check.sh" --mid-session "$INPUT" 2>/dev/null || echo "")
   fi
   if [ -n "$sensory_output" ]; then
     ESCAPED=$(escape_for_json "$sensory_output")
