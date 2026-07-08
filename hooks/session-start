@@ -4,7 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# session-start is the SINGLE sanctioned exception still allowed to source
+# state-io.sh (legacy carry-over reader + cleanup_stale_state_files /
+# validate_organism, until Task 4.2 slims it). event-io.sh is the write path:
+# this hook is the SOLE creator of the per-session append-only event log.
 source "$SCRIPT_DIR/scripts/lib/state-io.sh" || { printf '{}'; exit 0; }
+source "$SCRIPT_DIR/scripts/lib/event-io.sh" || { printf '{}'; exit 0; }
 source "$SCRIPT_DIR/scripts/lib/escape-json.sh" || { printf '{}'; exit 0; }
 source "$SCRIPT_DIR/scripts/lib/validate-organism.sh" || true
 
@@ -30,13 +35,23 @@ fi
 # Fallback: use epoch timestamp if no session_id from Claude Code
 [ -z "$HOOK_SESSION_ID" ] && HOOK_SESSION_ID="$(date +%s)"
 
-# Set session-scoped state file path
-init_state_file "$HOOK_SESSION_ID"
+# --- Create the per-session event log (the ONLY place it is created) ---
+# Line format: epoch|session_start|<iso8601-utc> <model_name>. The first value
+# token is a HARD contract: stop-gate Gate 6 parses it as the git --since anchor.
+# model_name is "unknown" at boot (matches v3's model_name=unknown default).
+# printf (not append_event) because the file does not exist yet.
+mkdir -p "$(_eio_week_dir)"
+EVENT_LOG="$(_eio_week_dir)/${HOOK_SESSION_ID}.events.log"
+printf '%s|session_start|%s %s\n' "$(date +%s)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "unknown" > "$EVENT_LOG"
 
 # Write current session_id to a known location so the session-end skill
-# can pass it to session-end-dispatch.sh (resolve_state_file needs the
-# session_id to find the correct state file when called outside hook context)
+# can pass it to session-end-dispatch.sh, and read surfaces (statusline,
+# sensory mid-session) can resolve when their hook JSON lacks a session_id.
+mkdir -p "$CORTEX_DIR"
 echo "$HOOK_SESSION_ID" > "${CORTEX_DIR}/current-session.id"
+
+# Profile drives proposals/social/sensory/feedback gating below.
+PROFILE=$(get_profile)
 
 # --- Step 0: Cleanup stale state files (>24 hours old) ---
 cleanup_stale_state_files
@@ -59,27 +74,93 @@ fi
 # Remove this when the bug is fixed.
 PLUGIN_ROOT="$PLUGIN_ROOT" "$SCRIPT_DIR/scripts/bootstrap-hooks.sh" 2>/dev/null || true
 
-# --- Step 1: Read old carry-over from ANY existing state files ---
+# --- Step 1: Derive carry-over from prior sessions ---
+# Two sources merged: (a) legacy *.local.md state files (state-io read path —
+# session-start is the last reader of legacy state until Task 4.2) and (b) prior
+# append-only event logs. Surviving items are re-appended into the NEW log so
+# per-session derivations (stop-gate Gate 4, pre-compact hash reconcile) stay
+# single-log.
+
+# (a) Legacy: scan old state files' [carry_over] sections. Track the max
+# carry_over_age among files that actually carried items (v3 semantics).
 old_carry_over=""
-old_carry_over_age="0"
+legacy_carry_age="0"
 for sf in "${SESSIONS_DIR}"/*/*.local.md "${STATE_DIR}"/cortex-state-*.local.md; do
   [ -f "$sf" ] || continue
-  [ "$sf" = "$STATE_FILE" ] && continue  # skip our own (not created yet)
   co=$(read_section "carry_over" "$sf")
   if [ -n "$co" ]; then
     old_carry_over="${old_carry_over}${co}"$'\n'
     age=$(read_field "carry_over_age" "$sf")
     age="${age:-0}"
-    # Take the max carry_over_age across all sessions
-    if [ "$age" -gt "$old_carry_over_age" ]; then
-      old_carry_over_age="$age"
+    case "$age" in *[!0-9]*) age=0 ;; esac
+    if [ "$age" -gt "$legacy_carry_age" ]; then
+      legacy_carry_age="$age"
     fi
   fi
 done
-# Filter carry-over: only keep lines that look like actual items (not raw journal content)
-# Valid patterns: starts with "- ", "* ", "TODO", "[carry-over]", "[mid-session pin]"
+
+# (b) Event logs: build the UNION of all carry_over items and all
+# carry_addressed hashes across prior logs FIRST (hashes are content-based, so
+# an item addressed in a DIFFERENT log still reconciles), then keep only items
+# whose hash is unaddressed. 30-day recency filter is by file mtime.
+event_all_items=""
+event_all_addressed=""
+event_carry_age="0"
+cutoff_epoch=$(date -d "30 days ago" +%s 2>/dev/null || date -v-30d +%s 2>/dev/null || echo "0")
+for f in "$(_eio_sessions_dir)"/*/*.events.log; do
+  [ -f "$f" ] || continue
+  [ "$f" = "$EVENT_LOG" ] && continue  # never scan the log we just created
+  if [ "$cutoff_epoch" -gt 0 ]; then
+    f_epoch=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo "0")
+    if [ "$f_epoch" -gt 0 ] && [ "$f_epoch" -lt "$cutoff_epoch" ]; then
+      continue
+    fi
+  fi
+  items=$(list_events carry_over "$f")
+  [ -n "$items" ] && event_all_items="${event_all_items}${items}"$'\n'
+  addressed=$(list_events carry_addressed "$f")
+  [ -n "$addressed" ] && event_all_addressed="${event_all_addressed}${addressed}"$'\n'
+  age=$(last_event carry_over_age "$f")
+  age="${age:-0}"
+  case "$age" in *[!0-9]*) age=0 ;; esac
+  if [ "$age" -gt "$event_carry_age" ]; then
+    event_carry_age="$age"
+  fi
+done
+
+# Set-difference: event items whose content hash is not in the addressed union.
+if [ -n "$event_all_items" ]; then
+  while IFS= read -r ev_item; do
+    [ -z "$ev_item" ] && continue
+    ev_hash=$(eio_item_hash "$ev_item")
+    if ! printf '%s\n' "$event_all_addressed" | grep -qxF "$ev_hash"; then
+      old_carry_over="${old_carry_over}${ev_item}"$'\n'
+    fi
+  done <<< "$event_all_items"
+fi
+
+# Filter merged carry-over: only keep lines that look like actual items (not raw
+# journal content). Valid: "- ", "* ", "TODO", "[carry-over]", "[mid-session pin]".
 if [ -n "$old_carry_over" ]; then
-  old_carry_over=$(echo "$old_carry_over" | grep -E '^[-*] |^TODO|^\[carry-over\]|^\[mid-session pin\]' | sort -u | sed '/^$/d')
+  old_carry_over=$(echo "$old_carry_over" | grep -E '^[-*] |^TODO|^\[carry-over\]|^\[mid-session pin\]' | sort -u | sed '/^$/d' || true)
+fi
+
+# Max carry-over age across all prior sources (legacy state files + event logs).
+old_carry_over_age="$legacy_carry_age"
+if [ "$event_carry_age" -gt "$old_carry_over_age" ]; then
+  old_carry_over_age="$event_carry_age"
+fi
+
+# Re-append surviving carry-over into the NEW log + record the age event.
+# Same semantics as v3: increment age if carry-over persists, else reset to 0.
+if [ -n "$old_carry_over" ]; then
+  while IFS= read -r co_item; do
+    [ -z "$co_item" ] && continue
+    append_event "carry_over" "$co_item"
+  done <<< "$old_carry_over"
+  append_event "carry_over_age" "$(( old_carry_over_age + 1 ))"
+else
+  append_event "carry_over_age" "0"
 fi
 
 # --- Step 1b: Synthesis automation (mechanical tasks) ---
@@ -90,50 +171,6 @@ synthesis_actions=""
 if [ -f "$COLLAB_FILE" ]; then
   export COLLAB_FILE
   synthesis_actions=$("$SCRIPT_DIR/scripts/synthesis-automation.sh" 2>/dev/null || echo "")
-fi
-
-# --- Step 2: Create fresh session-scoped state file ---
-mkdir -p "$STATE_DIR"
-cat > "$STATE_FILE" << 'STATEEOF'
-session_id=PLACEHOLDER_ID
-session_start=PLACEHOLDER_TIME
-model_name=unknown
-commits_count=0
-edits_since_last_commit=0
-tool_calls_count=0
-tests_run=false
-docs_updated=false
-carry_over_addressed=false
-stop_hook_active=false
-consecutive_blocks=0
-carry_over_age=0
-debug=false
-mode=normal
-commit_nudge_threshold=15
-last_sensory_check=
-last_remote_head=
-last_ci_status=
-
-[files_modified]
-
-[carry_over]
-
-[activity_log]
-STATEEOF
-# Fill in dynamic values
-write_field "session_id" "$HOOK_SESSION_ID" "$STATE_FILE"
-write_field "session_start" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$STATE_FILE"
-
-# --- Profile ---
-PROFILE=$(get_profile)
-write_field "profile" "$PROFILE" "$STATE_FILE"
-
-# Carry-over age tracking: increment if carry-over persists, reset if empty
-if [ -n "$old_carry_over" ]; then
-  new_age=$(( old_carry_over_age + 1 ))
-  write_field "carry_over_age" "$new_age" "$STATE_FILE"
-else
-  write_field "carry_over_age" "0" "$STATE_FILE"
 fi
 
 # --- Step 3: Read skill content + yesterday check (preserved from v1) ---
@@ -195,7 +232,11 @@ if [ -f "$HEALTH_FILE" ]; then
 fi
 
 # --- Step 4b: Feedback Loop — compute behavioral flags ---
+# v3 wrote mode/commit_nudge_threshold into the state file; v4 records them as
+# events. mode_set value = "<mode> <reason>" (reason: trend|churn|boot) — the
+# first token is what context-flow reads. Same health-file heuristics as v3.
 fb_mode="normal"
+fb_reason="boot"
 fb_commit_threshold=15
 
 if [ "$PROFILE" != "minimal" ] && [ -f "$HEALTH_FILE" ]; then
@@ -204,6 +245,7 @@ if [ "$PROFILE" != "minimal" ] && [ -f "$HEALTH_FILE" ]; then
   # Trend-based mode
   if [ "$fb_trend" = "degrading" ]; then
     fb_mode="cautious"
+    fb_reason="trend"
   fi
 
   # Topology-based mode: last 3 data rows all high-churn
@@ -216,6 +258,7 @@ if [ "$PROFILE" != "minimal" ] && [ -f "$HEALTH_FILE" ]; then
     fb_churn_count=$(echo "$fb_data_rows" | awk -F'|' '$11 == "high-churn" {c++} END {print c+0}')
     if [ "${fb_churn_count:-0}" -ge 3 ]; then
       fb_mode="cautious"
+      [ "$fb_reason" = "boot" ] && fb_reason="churn"
     fi
   fi
 
@@ -232,8 +275,8 @@ if [ "$PROFILE" != "minimal" ] && [ -f "$HEALTH_FILE" ]; then
   fi
 fi
 
-write_field "mode" "$fb_mode" "$STATE_FILE"
-write_field "commit_nudge_threshold" "$fb_commit_threshold" "$STATE_FILE"
+append_event "mode_set" "$fb_mode $fb_reason"
+append_event "threshold_set" "$fb_commit_threshold"
 
 # --- Step 4c: Statusline ---
 statusline_output=""
@@ -339,7 +382,9 @@ fi
 # --- Step 5c: Sensory System — external awareness ---
 sensory_output=""
 if [ "$PROFILE" != "minimal" ] && [ -x "$SCRIPT_DIR/scripts/sensory-check.sh" ]; then
-  sensory_output=$("$SCRIPT_DIR/scripts/sensory-check.sh" 2>/dev/null || echo "")
+  # Pass HOOK_INPUT so sensory-check resolves its write-log from session_id
+  # (full-scan signature: sensory-check.sh [--mid-session] [hook_json]).
+  sensory_output=$("$SCRIPT_DIR/scripts/sensory-check.sh" "$HOOK_INPUT" 2>/dev/null || echo "")
 fi
 
 # --- Step 6: Carry-over re-injection ---
