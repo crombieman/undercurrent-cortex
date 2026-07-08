@@ -79,8 +79,12 @@ assert_contains "mutations_queued_count" "$line2" "1 mutations queued"
 assert_contains "improving_trend_thriving_heart" "$line2" "💚 thriving"
 
 # --- Test 6: no event log, no health file — graceful defaults (stable
-# trend, thriving heart from zero avg_misses default, zero counts) ---
+# trend, thriving heart from zero avg_misses default, zero counts). Opted-in
+# project (sentinel stamped directly — no create_event_log call, since this
+# test is specifically about the absence of a log/health file). ---
 setup_test
+mkdir -p "$_TEST_TMPDIR/.claude/cortex"
+touch "$_TEST_TMPDIR/.claude/cortex/enabled"
 result=$(run_statusline "{\"session_id\":\"sl-missing\"}")
 line1=$(echo "$result" | head -1)
 line2=$(echo "$result" | tail -1)

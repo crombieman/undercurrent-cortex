@@ -171,7 +171,13 @@ assert_eq "tdd_guard_skips_non_src_paths" "{}" "$result"
 # Test 16: Missing event log (session_id present, no log file on disk) still
 # routes to sub-handlers — routing is the dispatcher's job regardless of state.
 # Mirrors test-post-dispatch.sh's missing_event_log_still_routes_to_handlers.
+# This tests an opted-in project whose particular session log is missing (NOT
+# an un-opted repo — that's tests/integration/test-opt-in-gate.sh), so the
+# sentinel is stamped directly (no create_event_log call — that would create
+# the very log file this test is about the absence of).
 setup_test
+mkdir -p "$_TEST_TMPDIR/.claude/cortex"
+touch "$_TEST_TMPDIR/.claude/cortex/enabled"
 json=$(mock_json "tool_name=Write" "session_id=pd-noeventlog" \
   "tool_input.file_path=supabase/migrations/074_test.sql" \
   "tool_input.content=CREATE INDEX idx ON t (id) WHERE d > CURRENT_DATE")

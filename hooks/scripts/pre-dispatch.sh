@@ -11,6 +11,12 @@ source "$SCRIPT_DIR/lib/json-extract.sh" || { printf '{}'; exit 0; }
 # Buffer stdin ONCE
 INPUT=$(cat)
 
+# Opt-in gate (spec §4.3): un-opted repos are fully inert. Directory
+# existence is NOT the signal (state-io.sh's migration can create
+# .claude/cortex/ as a side effect) — only the explicit sentinel file, written
+# by /cortex:setup or session-start's grandfathering check.
+[ -f "$(_eio_cortex_dir)/enabled" ] || { printf '{}'; exit 0; }
+
 # Resolve session-scoped event log for plan-mode tracking
 resolve_event_log "$INPUT"
 

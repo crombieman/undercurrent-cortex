@@ -4,17 +4,44 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-# session-start is the SINGLE sanctioned exception still allowed to source
-# state-io.sh (legacy carry-over reader + cleanup_stale_state_files /
-# validate_organism, until Task 4.2 slims it). event-io.sh is the write path:
-# this hook is the SOLE creator of the per-session append-only event log.
-source "$SCRIPT_DIR/scripts/lib/state-io.sh" || { printf '{}'; exit 0; }
+# event-io.sh sourced first: pure function definitions, no source-time side
+# effects (unlike state-io.sh's migrate_state_files(), which does mkdir -p on
+# .claude/cortex/ unconditionally when sourced, unless already migrated).
+# Deferred below until AFTER the opt-in gate passes, so a genuinely un-opted
+# repo gets ZERO directory creation from sourcing alone (spec §4.3).
 source "$SCRIPT_DIR/scripts/lib/event-io.sh" || { printf '{}'; exit 0; }
-source "$SCRIPT_DIR/scripts/lib/escape-json.sh" || { printf '{}'; exit 0; }
-source "$SCRIPT_DIR/scripts/lib/validate-organism.sh" || true
 
 # Buffer stdin to extract session_id
 HOOK_INPUT=$(cat)
+
+# --- Opt-in grandfathering (read-only probe) + gate (spec §4.3) ---
+# Runs before state-io.sh is sourced (its migrate_state_files() side effect
+# must never fire in a genuinely un-opted repo) and before any other work.
+# Grandfathering: a project with REAL prior use (health.local.md carrying
+# >=1 DATA row after the "---" separator — proof it predates opt-in gating,
+# not a drive-by repo where .claude/cortex/ exists only as an old
+# migrate_state_files side effect) gets the sentinel auto-created once.
+# Everything else requires running /cortex:setup.
+if [ ! -f "$(_eio_cortex_dir)/enabled" ]; then
+  _gf_health_file="$(_eio_cortex_dir)/health.local.md"
+  if [ -f "$_gf_health_file" ]; then
+    _gf_health_data=$(sed -n '/^---$/,$p' "$_gf_health_file" 2>/dev/null | tail -n +2)
+    if [ -n "$_gf_health_data" ] && printf '%s\n' "$_gf_health_data" | grep -q '|' 2>/dev/null; then
+      mkdir -p "$(_eio_cortex_dir)" 2>/dev/null || true
+      printf 'enabled %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$(_eio_cortex_dir)/enabled" 2>/dev/null || true
+    fi
+  fi
+fi
+[ -f "$(_eio_cortex_dir)/enabled" ] || { printf '{}'; exit 0; }
+
+# session-start is the SINGLE sanctioned exception still allowed to source
+# state-io.sh (legacy carry-over reader + cleanup_stale_state_files /
+# validate_organism, until Task 4.2 slims it). event-io.sh (sourced above) is
+# the write path: this hook is the SOLE creator of the per-session
+# append-only event log.
+source "$SCRIPT_DIR/scripts/lib/state-io.sh" || { printf '{}'; exit 0; }
+source "$SCRIPT_DIR/scripts/lib/escape-json.sh" || { printf '{}'; exit 0; }
+source "$SCRIPT_DIR/scripts/lib/validate-organism.sh" || true
 
 # Extract session_id from hook JSON (Claude Code provides this)
 HOOK_SESSION_ID=""

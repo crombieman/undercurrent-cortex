@@ -41,8 +41,23 @@ run_session_start() {
   printf '%s' "$json" | HOME="$_TEST_TMPDIR" bash "$SANDBOX/hooks/session-start" 2>/dev/null || true
 }
 
+# setup_opted_test — setup_test() wipes .claude/* before every test (fresh
+# state per test), which also wipes the sentinel setup_script_sandbox stamped
+# once at suite start. Unlike the other dispatcher suites, session-start is
+# the CREATOR of the event log (never a create_event_log consumer that would
+# re-stamp the sentinel as a side effect), so every test in this file must
+# re-mark the project opted-in itself (spec §4.3 gate). Un-opted-repo and
+# grandfathering behavior are tested separately in
+# tests/integration/test-opt-in-gate.sh — every test below exercises normal
+# (already opted-in) session-start behavior.
+setup_opted_test() {
+  setup_test
+  mkdir -p "$_TEST_TMPDIR/.claude/cortex"
+  touch "$_TEST_TMPDIR/.claude/cortex/enabled"
+}
+
 # --- Test 1: creates the event log with the HARD session_start format ---
-setup_test
+setup_opted_test
 sid="ss-create"
 run_session_start "$(mock_json "session_id=$sid")" > /dev/null
 NEW_LOG="$(_eio_week_dir)/${sid}.events.log"
@@ -64,7 +79,7 @@ fi
 assert_eq "session_start_second_token_is_model" "unknown" "$ss_second"
 
 # --- Test 2: mode_set / threshold_set / carry_over_age appended (defaults) ---
-setup_test
+setup_opted_test
 sid="ss-events"
 run_session_start "$(mock_json "session_id=$sid")" > /dev/null
 NEW_LOG="$(_eio_week_dir)/${sid}.events.log"
@@ -73,7 +88,7 @@ assert_eq "threshold_set_defaults_to_15" "15" "$(last_event threshold_set "$NEW_
 assert_eq "carry_over_age_zero_when_no_carryover" "0" "$(last_event carry_over_age "$NEW_LOG")"
 
 # --- Test 3: degrading health drives mode_set=cautious + tightened threshold ---
-setup_test
+setup_opted_test
 sid="ss-cautious"
 HF="$_TEST_TMPDIR/.claude/cortex/health.local.md"
 mkdir -p "$(dirname "$HF")"
@@ -91,7 +106,7 @@ assert_eq "degrading_trend_sets_cautious_mode" "cautious trend" "$(last_event mo
 assert_eq "high_epc_tightens_threshold" "5" "$(last_event threshold_set "$NEW_LOG")"
 
 # --- Test 4: current-session.id marker written ---
-setup_test
+setup_opted_test
 sid="ss-marker"
 run_session_start "$(mock_json "session_id=$sid")" > /dev/null
 MARKER="$_TEST_TMPDIR/.claude/cortex/current-session.id"
@@ -99,7 +114,7 @@ assert_file_exists "current_session_id_written" "$MARKER"
 assert_eq "current_session_id_content" "$sid" "$(cat "$MARKER" 2>/dev/null | tr -d '[:space:]')"
 
 # --- Test 5: unaddressed carry-over in a prior event log resurfaces ---
-setup_test
+setup_opted_test
 sid="ss-carryover"
 create_event_log "$_TEST_TMPDIR/.claude" "prior-open" \
   "1700000100|carry_over|- Fix scoring null handling" > /dev/null
@@ -112,7 +127,7 @@ assert_contains "carryover_output_has_header" "$result" "Carry-over from prior s
 assert_eq "carry_over_age_incremented" "1" "$(last_event carry_over_age "$NEW_LOG")"
 
 # --- Test 6: an addressed item (hash present in same log) does NOT resurface ---
-setup_test
+setup_opted_test
 sid="ss-addressed"
 addr_item="- Addressed handling zzz"
 addr_hash=$(eio_item_hash "$addr_item")
@@ -128,7 +143,7 @@ assert_not_contains "addressed_item_absent_from_output" "$result" "Addressed han
 # --- Test 7: cross-log addressing (item in log A, hash in log B) reconciles ---
 # Proves the union-first set-difference: an item addressed in a DIFFERENT log
 # must still be suppressed.
-setup_test
+setup_opted_test
 sid="ss-crosslog"
 xitem="- Cross log handling qqq"
 xhash=$(eio_item_hash "$xitem")
@@ -142,7 +157,7 @@ assert_not_contains "cross_log_addressed_suppressed" "$new_items" "Cross log han
 # --- Test 7b: a re-raised item (carry epoch AFTER the addressed epoch) resurfaces ---
 # Proves epoch ordering (spec §3.5 amendment): addressing does NOT permanently
 # suppress an item — re-raising identical text later resurrects it.
-setup_test
+setup_opted_test
 sid="ss-reraise"
 ritem="- Reraised handling ccc"
 rhash=$(eio_item_hash "$ritem")
@@ -157,7 +172,7 @@ assert_contains "reraised_item_resurfaces_in_new_log" "$new_items" "Reraised han
 assert_contains "reraised_item_surfaced_in_output" "$result" "Reraised handling ccc"
 
 # --- Test 8: legacy *.local.md carry-over is still read + re-surfaced ---
-setup_test
+setup_opted_test
 sid="ss-legacy"
 mkdir -p "$_TEST_TMPDIR/.claude/cortex/sessions/legacy-week"
 cat > "$_TEST_TMPDIR/.claude/cortex/sessions/legacy-week/legacy-sess.local.md" << 'LEOF'
@@ -177,14 +192,14 @@ assert_contains "legacy_carryover_read_into_output" "$result" "Legacy carryover 
 assert_contains "legacy_carryover_reappended_to_log" "$new_items" "Legacy carryover item"
 
 # --- Test 9: NO .local.md state file is created for the new session ---
-setup_test
+setup_opted_test
 sid="ss-nostatefile"
 run_session_start "$(mock_json "session_id=$sid")" > /dev/null
 md_count=$(find "$(_eio_week_dir)" -name '*.local.md' 2>/dev/null | wc -l | tr -d ' ')
 assert_eq "no_local_md_state_file_created" "0" "$md_count"
 
 # --- Test 10: output is valid JSON carrying additional_context ---
-setup_test
+setup_opted_test
 sid="ss-json"
 result=$(run_session_start "$(mock_json "session_id=$sid")")
 assert_json_valid "output_is_valid_json" "$result"
@@ -192,7 +207,7 @@ assert_contains "output_has_additional_context" "$result" "additional_context"
 assert_contains "output_has_session_start_marker" "$result" "cortex-session-start"
 
 # --- Test 11: empty stdin still exits 0 with valid JSON ---
-setup_test
+setup_opted_test
 set +e
 result=$(printf '' | HOME="$_TEST_TMPDIR" bash "$SANDBOX/hooks/session-start" 2>/dev/null)
 rc=$?
@@ -203,7 +218,7 @@ assert_json_valid "empty_stdin_valid_json" "$result"
 # --- Test 12: malformed (non-JSON) stdin still exits 0 with valid JSON ---
 # jq/python3 sid-extraction exit non-zero on garbage; under set -euo pipefail the
 # failing command substitution must not kill the hook (contract: exit 0 + JSON).
-setup_test
+setup_opted_test
 set +e
 result=$(printf 'not valid json {{{' | HOME="$_TEST_TMPDIR" bash "$SANDBOX/hooks/session-start" 2>/dev/null)
 rc=$?
@@ -220,7 +235,7 @@ assert_json_valid "malformed_stdin_valid_json" "$result"
 # the $(...) command substitution used to capture its echoed mock-bin path,
 # i.e. inside a subshell, so the mutation never reaches the caller; see task
 # report.
-setup_test
+setup_opted_test
 sid="ss-pretty-tier3"
 TIER3_MOCK="$_TEST_TMPDIR/tier3-mock-bin"
 mkdir -p "$TIER3_MOCK"
@@ -238,7 +253,7 @@ assert_eq "pretty_json_tier3_correct_sid" "$sid" "$(basename "$NEW_LOG" .events.
 # --- Test 13: a pre-existing event log is NOT clobbered by a same-sid start ---
 # session-start must skip the `>` create when the log already exists, so prior
 # events (e.g. from a resumed session with the same id) survive.
-setup_test
+setup_opted_test
 sid="ss-noclobber"
 mkdir -p "$(_eio_week_dir)"
 PRELOG="$(_eio_week_dir)/${sid}.events.log"
@@ -251,7 +266,7 @@ assert_contains "preexisting_event_survives_second_start" \
 # --- Test 14: header-only health file (zero data rows) does not crash start ---
 # The health-file grep pipelines exit non-zero when a grep -v chain empties out;
 # under pipefail the unguarded assignment would kill the hook mid-flight.
-setup_test
+setup_opted_test
 sid="ss-headeronly-health"
 mkdir -p "$_TEST_TMPDIR/.claude/cortex"
 create_health_file "$_TEST_TMPDIR/.claude/cortex/health.local.md"
@@ -266,7 +281,7 @@ assert_json_valid "header_only_health_valid_json" "$result"
 # Log A carries item X (age 4) but X is addressed in log B; log B also carries a
 # fresh unaddressed item Y (age 0). The new age must derive from Y's log (0+1=1),
 # NOT bleed A's stale age (would give 5). Y resurfaces, X does not.
-setup_test
+setup_opted_test
 sid="ss-age-survivors"
 xitem="- Stale addressed item aaa"
 xhash=$(eio_item_hash "$xitem")
@@ -295,7 +310,7 @@ assert_not_contains "stale_addressed_item_suppressed" "$new_items" "Stale addres
 # with age 1; age-drift-2 carries the SAME item with trailing spaces and age 6.
 # Nothing addressed => the item survives. Both logs must be credited:
 # new age = max(6,1)+1 = 7 — NOT 2 (text comparison credits only age-drift-1).
-setup_test
+setup_opted_test
 sid="ss-age-drift"
 ditem="- Whitespace drift item ddd"
 create_event_log "$_TEST_TMPDIR/.claude" "age-drift-1" \

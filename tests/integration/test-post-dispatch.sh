@@ -106,7 +106,13 @@ assert_eq "checkpoint_does_not_fire_before_25" "{}" "$result"
 # routes to sub-handlers — routing is the dispatcher's job regardless of state.
 # Proven via pattern-template.sh (state-io based, unaffected by the missing
 # event log) firing its exemplar systemMessage for a Write.
+# This tests an opted-in project whose particular session log is missing (NOT
+# an un-opted repo — that's tests/integration/test-opt-in-gate.sh), so the
+# sentinel is stamped directly (no create_event_log call — that would create
+# the very log file this test is about the absence of).
 setup_test
+mkdir -p "$_TEST_TMPDIR/.claude/cortex"
+touch "$_TEST_TMPDIR/.claude/cortex/enabled"
 mkdir -p "$_TEST_TMPDIR/.claude/exemplars"
 echo "export const Foo = 1;" > "$_TEST_TMPDIR/.claude/exemplars/component.ts"
 json=$(mock_json "tool_name=Write" "session_id=pd-noeventlog" "tool_input.file_path=${_TEST_TMPDIR}/src/new-file.ts")

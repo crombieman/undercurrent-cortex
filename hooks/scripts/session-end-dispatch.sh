@@ -7,6 +7,11 @@ source "$SCRIPT_DIR/lib/event-io.sh" || { printf '{}'; exit 0; }
 # Buffer stdin (SessionEnd may or may not provide JSON)
 INPUT=$(cat)
 
+# Opt-in gate (spec §4.3): un-opted repos are fully inert. Directory
+# existence is NOT the signal — only the explicit sentinel file, written by
+# /cortex:setup or session-start's grandfathering check.
+[ -f "$(_eio_cortex_dir)/enabled" ] || { printf '{}'; exit 0; }
+
 # Resolve session-scoped event log from session_id in hook JSON. This script
 # WRITES (health_written event), so it must use the write resolver — the
 # readonly resolver's current-session.id marker fallback is for read surfaces

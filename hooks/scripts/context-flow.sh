@@ -14,6 +14,12 @@ CONTEXT_DIR="$SCRIPT_DIR/../../context"
 
 # Read stdin JSON, resolve session-scoped event log, extract user_prompt
 INPUT=$(cat)
+
+# Opt-in gate (spec §4.3): un-opted repos are fully inert. Directory
+# existence is NOT the signal — only the explicit sentinel file, written by
+# /cortex:setup or session-start's grandfathering check.
+[ -f "$(_eio_cortex_dir)/enabled" ] || { printf '{}'; exit 0; }
+
 resolve_event_log "$INPUT"
 PROMPT=$(printf '%s' "$INPUT" | extract_json_field "user_prompt")
 

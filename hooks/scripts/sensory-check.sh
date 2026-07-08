@@ -14,6 +14,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$SCRIPT_DIR/lib/event-io.sh" || exit 0
 
+# Opt-in gate (spec §4.3): un-opted repos are fully inert. Directory
+# existence is NOT the signal — only the explicit sentinel file, written by
+# /cortex:setup or session-start's grandfathering check. Plain exit (text
+# surface, no JSON wrapper — the caller wraps output in JSON if needed).
+[ -f "$(_eio_cortex_dir)/enabled" ] || exit 0
+
 MID_SESSION=false
 HOOK_JSON=""
 if [ "${1:-}" = "--mid-session" ]; then

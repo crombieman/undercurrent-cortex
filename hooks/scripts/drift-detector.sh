@@ -5,13 +5,24 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-source "$SCRIPT_DIR/lib/state-io.sh" || { printf '{}'; exit 0; }
+# event-io.sh (not state-io.sh): state-io.sh runs migrate_state_files() at
+# SOURCE TIME, which does mkdir -p on .claude/cortex/ unconditionally (unless
+# already migrated) — a side effect that would fire before the opt-in gate
+# below ever gets a chance to run, defeating spec §4.3's "zero directory
+# creation in un-opted repos" requirement. event-io.sh's _eio_project_dir()
+# provides the same PROJECT_DIR value with no source-time side effects.
+source "$SCRIPT_DIR/lib/event-io.sh" || { printf '{}'; exit 0; }
 source "$SCRIPT_DIR/lib/escape-json.sh" || { printf '{}'; exit 0; }
 
 # Consume stdin (hook may pass data; we don't need it)
 cat > /dev/null 2>&1 || true
 
-PROJECT="$PROJECT_DIR"
+# Opt-in gate (spec §4.3): un-opted repos are fully inert. Directory
+# existence is NOT the signal — only the explicit sentinel file, written by
+# /cortex:setup or session-start's grandfathering check.
+[ -f "$(_eio_cortex_dir)/enabled" ] || { printf '{}'; exit 0; }
+
+PROJECT="$(_eio_project_dir)"
 
 # Rotate checks: day-of-year mod 2 → picks check 0-1
 day_of_year=$(date +%j | sed 's/^0*//')

@@ -4,15 +4,54 @@
 
 PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
+# mark_opted_in <claude_dir>
+# Stamps the opt-in sentinel (spec §4.3: `.claude/cortex/enabled`, a FILE —
+# directory existence is explicitly NOT the signal). Shared by every fixture
+# helper that builds a .claude/cortex tree, so any test using them represents
+# an opted-in project by default. Idempotent (won't clobber an existing
+# sentinel).
+#
+# FIXED timestamp, deliberately NOT $(date ...): only sentinel PRESENCE gates
+# (content is diagnostic), fixed values match this file's other fixtures
+# (epoch 1700000000 / 2026-03-14), and — critically — calling `date` here
+# hangs test-drift-detector.sh: its create_mock_date mock (mock-commands.sh)
+# captures `which date` as the "real" passthrough target, which on the 2nd+
+# create_mock_date call is the previous mock itself, so any non-%j date
+# invocation inside that suite re-execs itself forever. This fixture runs
+# inside that mocked scope via create_state_file.
+mark_opted_in() {
+  local claude_dir="$1"
+  mkdir -p "$claude_dir/cortex"
+  [ -f "$claude_dir/cortex/enabled" ] || \
+    printf 'enabled %s\n' "2026-03-14T00:00:00Z" > "$claude_dir/cortex/enabled"
+}
+
+# create_unopted_dir <claude_dir>
+# Creates <claude_dir> ONLY — guarantees no cortex/ subtree exists, and
+# therefore no sentinel. Mirrors the "drive-by repo" scenario spec §4.3 warns
+# about: a project where hooks ran before opt-in gating existed and left
+# .claude/cortex/ behind as a side effect, but never ran /cortex:setup.
+# Used by un-opted-repo gate tests (tests/integration/test-opt-in-gate.sh).
+# Echoes the path.
+create_unopted_dir() {
+  local dir="$1"
+  mkdir -p "$dir"
+  echo "$dir"
+}
+
 # create_event_log <claude_dir> <session_id> [event-lines...]
 # Creates a v4 append-only event log in the test-week bucket.
 # <claude_dir> is the fake .claude dir (same convention as create_state_file).
 # Extra args are appended verbatim (caller supplies full "epoch|type|value" lines).
 # Echoes the log path.
+# Also stamps the opt-in sentinel (spec §4.3) — every fixture-created session
+# represents an opted-in project. Un-opted-repo behavior is tested via
+# create_unopted_dir, which deliberately never calls this.
 create_event_log() {
   local dir="$1" sid="$2"
   shift 2
   mkdir -p "$dir/cortex/sessions/test-week"
+  mark_opted_in "$dir"
   local file="$dir/cortex/sessions/test-week/${sid}.events.log"
   printf '%s|session_start|2026-03-14T00:00:00Z test-model\n' "1700000000" > "$file"
   local line
@@ -34,6 +73,7 @@ create_state_file() {
   local dir="$1" sid="$2"
   shift 2
   mkdir -p "$dir/cortex/sessions/test-week"
+  mark_opted_in "$dir"
   local file="$dir/cortex/sessions/test-week/${sid}.local.md"
   cat > "$file" << 'EOF'
 session_id=PLACEHOLDER_SID
@@ -230,7 +270,13 @@ create_context_dir() {
 
 # create_journal <dir> <date> [content]
 create_journal() {
-  local dir="$1" date="$2" content="${3:-# Journal - $date}"
+  local dir="$1" date="$2"
+  # Split from the local above: under `set -u`, a compound `local a=1 b=$a`
+  # evaluates RHS expressions before the earlier names are visible as locals,
+  # so referencing $date in the same statement's default value throws
+  # "unbound variable" (pre-existing latent bug — every prior caller passed
+  # all 3 args, so the default branch was never exercised until now).
+  local content="${3:-# Journal - $date}"
   mkdir -p "$dir/memory"
   echo "$content" > "$dir/memory/${date}.md"
 }
@@ -309,6 +355,13 @@ setup_script_sandbox() {
 
   # Create cortex directory structure in sandbox
   mkdir -p "$tmpdir/.claude/cortex/sessions"
+  # Opt-in sentinel (spec §4.3) — the sandbox represents an opted-in project.
+  # NOTE: this write happens once at sandbox setup, BEFORE any suite's first
+  # setup_test() call, which wipes .claude/* per test. Callers that invoke
+  # setup_test() between tests must re-stamp per test (e.g. via
+  # create_event_log/create_state_file, which call mark_opted_in themselves,
+  # or an explicit mark_opted_in call) — this line alone does not survive.
+  mark_opted_in "$tmpdir/.claude"
 
   # Copy context files (small, read-only)
   for f in "$plugin_root/context/"*.md; do
