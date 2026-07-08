@@ -2,3 +2,5 @@
 .claude/
 *.local.md
 docs/
+memory/
+tasks/
