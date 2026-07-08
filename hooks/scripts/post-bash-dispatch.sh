@@ -25,12 +25,17 @@ fi
 # --- Pattern: git commit (not amend) ---
 if echo "$command_str" | grep -qE '^[[:space:]]*git[[:space:]]+commit[[:space:]]'; then
   if ! echo "$command_str" | grep -q '\-\-amend'; then
-    # Recency guard: PostToolUse only fires on exit-0, so the commit command
-    # itself succeeded — but compound commands (e.g. "git add . && git commit")
-    # can leave a stale HEAD if this hook fires late relative to the actual
-    # commit. Only append the commit event when HEAD's committer timestamp is
-    # within 60s of now. `edits_since_last_commit` derives via the `commit`
-    # anchor — no reset write needed here (mapping-table resolution).
+    # Recency guard: the anchored regex above matches any command that STARTS
+    # with `git commit `, including invocations that create no new commit — e.g.
+    # `git commit` aborting on an empty index, `git commit --dry-run`, or a
+    # commit that a hook rejected. In those cases HEAD is stale (it points at an
+    # earlier commit) and recording it would attribute an old SHA to this
+    # session. So only append the commit event when HEAD's committer timestamp is
+    # within 60s of now — proof a commit was actually just created. (The anchored
+    # `^…git commit` regex never matches the compound form `git add . && git
+    # commit`, so that case is out of scope here.) `edits_since_last_commit`
+    # derives via the `commit` anchor — no reset write needed (mapping-table
+    # resolution).
     if [ -n "$EVENT_LOG" ] && [ -f "$EVENT_LOG" ]; then
       commit_ts=$(git -C "${PROJECT_DIR}" log -1 --format=%ct 2>/dev/null || echo "")
       if [[ "$commit_ts" =~ ^[0-9]+$ ]]; then

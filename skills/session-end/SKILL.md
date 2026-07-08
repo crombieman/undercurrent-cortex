@@ -1,7 +1,7 @@
 ---
 name: session-end
 description: This skill should be used when wrapping up a working session — writes journal entry, captures carry-over, runs reasoning audit and pattern escalation check.
-version: 0.4.0
+version: 0.5.0
 ---
 
 # Session End
@@ -87,6 +87,15 @@ Log as `[health-metrics]`:
 **What counts as notable**: touched code, made an architectural choice, received a correction, fixed a bug, or spent more than 10 minutes on anything.
 
 See `examples/journal-entry.md` for a model journal entry with proper tags.
+
+**Step 6c — Mark resolved carry-over** (event-log emitter, only if carry-over was inherited):
+For each `[carry-over]` item that was surfaced at session-start and you verified as actually resolved this session, append an `addressed` marker to the current session's event log. Future sessions reconcile these markers by content hash and stop resurfacing the item (they also feed stop-gate Gate 4 — without an emitter, every carry-over-inheriting session stays blocked). Run once per resolved item, substituting its exact text:
+
+```bash
+SID=$(cat .claude/cortex/current-session.id 2>/dev/null || true) && EIO=$(ls -t ~/.claude/plugins/cache/undercurrent-studio/cortex/*/hooks/scripts/lib/event-io.sh 2>/dev/null | head -1 || true) && [ -n "$EIO" ] && [ -n "$SID" ] && source "$EIO" && resolve_event_log "{\"session_id\":\"${SID}\"}" && append_event carry_addressed "$(eio_item_hash "EXACT carry-over item text")" || echo "event-io not found — carry_addressed skipped"
+```
+
+Only mark items you genuinely resolved — do not blanket-close still-open carry-over. Items left open are re-surfaced by the next session-start automatically.
 
 **Step 7 — Write health row** (non-negotiable, every session):
 The SessionEnd hook is unreliable (~40% fire rate). The skill is the primary path for health row writes. Run this Bash command:
