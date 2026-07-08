@@ -2,36 +2,36 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-source "$SCRIPT_DIR/lib/state-io.sh" || { printf '{}'; exit 0; }
+source "$SCRIPT_DIR/lib/event-io.sh" || { printf '{}'; exit 0; }
 
 # Buffer stdin (SessionEnd may or may not provide JSON)
 INPUT=$(cat)
 
-# Resolve session-scoped state file from session_id in hook JSON
-resolve_state_file "$INPUT"
+# Resolve session-scoped event log from session_id in hook JSON. This script
+# WRITES (health_written event), so it must use the write resolver — the
+# readonly resolver's current-session.id marker fallback is for read surfaces
+# only (spec §3.4).
+resolve_event_log "$INPUT"
 
-# Guard: state file must exist (session-start creates it)
-# Fallback: if session-scoped file doesn't exist, try legacy file
-if [ ! -f "$STATE_FILE" ]; then
-  # Try newest file across new layout + legacy flat
-  local_fallback=$(ls -t "${SESSIONS_DIR}"/*/*.local.md "${STATE_DIR}"/cortex-state-*.local.md "${STATE_DIR}/cortex-state.local.md" 2>/dev/null | head -1 || true)
-  if [ -n "$local_fallback" ] && [ -f "$local_fallback" ]; then
-    STATE_FILE="$local_fallback"
-  else
-    printf '{}'
-    exit 0
-  fi
+# Guard: event log must exist (session-start creates it). No legacy
+# state-file fallback in v4 — the log IS the state.
+if [ -z "$EVENT_LOG" ] || [ ! -f "$EVENT_LOG" ]; then
+  printf '{}'
+  exit 0
 fi
 
-# Bug 4 fix: derive PROJECT_DIR from state file location, not cwd.
-# State file is at: {project}/.claude/cortex/sessions/YYYY-WNN/{sid}.local.md
+# Bug 4 fix (preserved from v3): derive PROJECT_DIR from event log location,
+# not cwd. Event log is at: {project}/.claude/cortex/sessions/YYYY-WNN/{sid}.events.log
 # Navigate 4 levels up from the YYYY-WNN dir to reach the project root.
-if [ -f "$STATE_FILE" ]; then
-  STATE_PROJECT_DIR=$(cd "$(dirname "$STATE_FILE")/../../../.." && pwd)
-  if [ -d "$STATE_PROJECT_DIR/memory" ]; then
-    PROJECT_DIR="$STATE_PROJECT_DIR"
-  fi
+PROJECT_DIR="$(eio_project_dir)"
+EVENT_LOG_PROJECT_DIR=$(cd "$(dirname "$EVENT_LOG")/../../../.." && pwd)
+if [ -d "$EVENT_LOG_PROJECT_DIR/memory" ]; then
+  PROJECT_DIR="$EVENT_LOG_PROJECT_DIR"
 fi
+
+CORTEX_DIR="${PROJECT_DIR}/.claude/cortex"
+HEALTH_FILE="${CORTEX_DIR}/health.local.md"
+PROPOSALS_FILE="${CORTEX_DIR}/proposals.local.md"
 
 # --- Compute metrics ---
 today=$(date +%Y-%m-%d)
@@ -46,9 +46,9 @@ if [ -f "$journal" ] && grep -q '\[reasoning-miss\]' "$journal" 2>/dev/null; the
 fi
 
 # 2. edits_per_commit: total edit operations / max(commits, 1)
-commits_count=$(read_field "commits_count" "$STATE_FILE")
+commits_count=$(count_events commit)
 commits_count="${commits_count:-0}"
-files_modified=$(read_section "files_modified" "$STATE_FILE")
+files_modified=$(list_events file_edit | sed 's/^[rx] //')
 total_edits=0
 if [ -n "$files_modified" ]; then
   total_edits=$(echo "$files_modified" | wc -l | tr -d ' ')
@@ -58,10 +58,11 @@ divisor=$commits_count
 edits_per_commit=$(awk "BEGIN { printf \"%.1f\", $total_edits / $divisor }")
 
 # 3. docs_synced
-docs_synced=$(read_field "docs_updated" "$STATE_FILE")
-docs_synced="${docs_synced:-false}"
+docs_synced=false
+[ "$(count_events docs_edit)" -gt 0 ] && docs_synced=true
 
-# 4. tests_delta: count test/spec files in [files_modified]
+# 4. tests_delta: count test/spec files among file_edit paths (not unique —
+# v3 counted every edit line, so a test file touched 3x counts as 3)
 tests_delta=0
 if [ -n "$files_modified" ]; then
   if echo "$files_modified" | grep -qE '\.(test|spec)\.' 2>/dev/null; then
@@ -92,8 +93,10 @@ if [ -f "$journal" ]; then
   fi
 fi
 
-# 8. duration_minutes: session_start → now
-session_start=$(read_field "session_start" "$STATE_FILE")
+# 8. duration_minutes: session_start → now. Event value is "<iso> <model>" —
+# the first space-token is the timestamp (session-start hook contract).
+session_start_event=$(last_event session_start)
+session_start="${session_start_event%% *}"
 duration_min=0
 if [ -n "$session_start" ] && [ "$session_start" != "PLACEHOLDER_TIME" ] && [ "$session_start" != "unknown" ]; then
   # C-2 fix: replace ISO 8601 T separator with space for GNU date
@@ -145,7 +148,8 @@ if [ -n "$files_modified" ]; then
   unique_files=$(echo "$files_modified" | sort -u)
   while IFS= read -r raw_filepath; do
     [ -z "$raw_filepath" ] && continue
-    # Fix 2: Skip non-path lines (state flags like health_written=true leak into [files_modified])
+    # Fix 2: skip non-path lines (defensive — file_edit values are always
+    # real paths in v4, but keeps parity with any malformed event values)
     echo "$raw_filepath" | grep -qE '[/\\]' || continue
     # Fix 1: Normalize path format (backslash→forward slash, lowercase drive→uppercase)
     filepath=$(normalize_path "$raw_filepath")
@@ -179,7 +183,7 @@ fi
 # --- Skip health row if session had zero tracked activity (noise prevention) ---
 # Tag idle sessions instead of skipping them. Previously this exited early,
 # making ~60% of sessions invisible to health tracking. Now we tag them as
-# idle and still write the row. Rolling averages exclude idle to avoid dilution.
+# idle and still write the row. Rolling averages exclude idle rows.
 if [ "${total_edits:-0}" -eq 0 ] && [ "${commits_count:-0}" -eq 0 ] && \
    [ "${reasoning_misses:-0}" -eq 0 ] && [ "${tests_delta:-0}" -eq 0 ] && \
    [ "${lessons_created:-0}" -eq 0 ] && [ "${carry_total:-0}" -eq 0 ]; then
@@ -192,22 +196,18 @@ fi
 # Bug 2 fix: also check global health file for today's date (per-session flag
 # doesn't prevent different sessions on the same day from writing duplicate rows).
 if grep -q "^${today}|" "$HEALTH_FILE" 2>/dev/null; then
-  write_field "health_written" "true" "$STATE_FILE" 2>/dev/null || true
+  append_event "health_written" "$today"
   printf '{}'
   exit 0
 fi
-health_written=$(grep '^health_written=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\r' || true)
-if [ "$health_written" = "true" ]; then
+if [ "$(count_events health_written)" -gt 0 ]; then
   printf '{}'
   exit 0
 fi
-# Mark as written — append field if missing, replace if present
-if grep -q '^health_written=' "$STATE_FILE" 2>/dev/null; then
-  write_field "health_written" "true" "$STATE_FILE"
-else
-  # Insert before first section header (only first match via 0,/pattern/)
-  sed '0,/^\[/{s/^\[/health_written=true\n[/}' "$STATE_FILE" > "$STATE_FILE.tmp.$$" && mv "$STATE_FILE.tmp.$$" "$STATE_FILE"
-fi
+# Mark as written — appended before the health-file write itself (matches v3
+# ordering: a crash mid-write still leaves this session flagged, avoiding a
+# retry storm on the next SessionEnd fire).
+append_event "health_written" "$today"
 
 # --- Write to health file ---
 mkdir -p "$(dirname "$HEALTH_FILE")"
@@ -273,7 +273,7 @@ if [ -f "$PROPOSALS_FILE" ]; then
   if grep -q '^id=' "$PROPOSALS_FILE" 2>/dev/null; then
     proposal_count=$(grep -c '^id=' "$PROPOSALS_FILE" 2>/dev/null)
     if [ "${proposal_count:-0}" -gt 50 ]; then
-      write_field "proposals_need_archiving" "true" "$STATE_FILE" 2>/dev/null || true
+      append_event "proposals_need_archiving" "true"
     fi
   fi
 fi

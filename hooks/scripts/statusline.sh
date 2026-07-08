@@ -2,22 +2,27 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-source "$SCRIPT_DIR/lib/state-io.sh" || exit 0
+source "$SCRIPT_DIR/lib/event-io.sh" || exit 0
 
-# Resolve state file — pass JSON arg if available, otherwise find newest
-resolve_state_file "${1:-}"
+# Resolve event log — read-only surface (statusline never appends). Falls
+# back to current-session.id when the hook JSON arg lacks a session_id
+# (spec §3.4: appends require write resolution, but reads may use the marker).
+resolve_event_log_readonly "${1:-}"
+
+PROJECT_DIR="$(eio_project_dir)"
+CORTEX_DIR="${PROJECT_DIR}/.claude/cortex"
+HEALTH_FILE="${CORTEX_DIR}/health.local.md"
+PROPOSALS_FILE="${CORTEX_DIR}/proposals.local.md"
 
 # --- Line 1 data: session activity ---
-edits=$(read_field "edits_since_last_commit")
+edits=$(count_events file_edit r commit)
 edits="${edits:-0}"
-commits=$(read_field "commits_count")
+commits=$(count_events commit)
 commits="${commits:-0}"
 
-tests_run=$(read_field "tests_run")
-tests_icon="❌"; [ "$tests_run" = "true" ] && tests_icon="✅"
+tests_icon="❌"; [ "$(count_events test_run)" -gt 0 ] && tests_icon="✅"
 
-docs_updated=$(read_field "docs_updated")
-docs_icon="❌"; [ "$docs_updated" = "true" ] && docs_icon="✅"
+docs_icon="❌"; [ "$(count_events docs_edit)" -gt 0 ] && docs_icon="✅"
 
 # --- Line 2 data: organism health ---
 trend="stable"
@@ -47,7 +52,8 @@ if [ -f "$PROPOSALS_FILE" ]; then
 fi
 
 # Heart + status + arrow
-mode=$(read_field "mode")
+mode=$(last_event mode_set)
+mode="${mode%% *}"
 mode="${mode:-normal}"
 
 heart="💛"; status="adapting"; arrow="→"
