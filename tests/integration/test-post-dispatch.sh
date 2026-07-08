@@ -120,5 +120,23 @@ json=$(mock_json "tool_name=Bash" "tool_input.command=echo hi")
 result=$(run_post_dispatch "$json")
 assert_eq "no_session_id_routes_and_returns_empty" "{}" "$result"
 
+# Test 10: A journal Write (memory/*.md) landing EXACTLY on the modulo-25
+# checkpoint boundary must skip the nag and fall through to routing, so
+# post-edit-dispatch records journal_edit (the checkpoint anchor). Before the
+# fix, the checkpoint fired-and-exited, losing the journal_edit/file_edit events.
+setup_test
+seed=()
+for i in $(seq 1 24); do
+  seed+=("$((1700000000 + i))|tool_call|Read")
+done
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "pd-journal-boundary" "${seed[@]}")
+json=$(mock_json "tool_name=Write" "session_id=pd-journal-boundary" "tool_input.file_path=${_TEST_TMPDIR}/memory/2026-07-07.md")
+result=$(run_post_dispatch "$json")
+assert_not_contains "journal_boundary_no_checkpoint" "$result" "Mid-session checkpoint"
+journal_edits=$(list_events journal_edit "$LOG")
+assert_contains "journal_boundary_records_journal_edit" "$journal_edits" "2026-07-07.md"
+after=$(count_events tool_call '' '' "$LOG")
+assert_eq "journal_boundary_tool_call_count_25" "25" "$after"
+
 export PATH="$SAVED_PATH"
 end_suite
