@@ -25,6 +25,11 @@ create_event_log() {
 # create_state_file <dir> <session_id> [overrides...]
 # Creates a well-formed state file. Overrides: "field=value" pairs.
 # Returns the file path.
+# LEGACY-ONLY (v3 reader tests; delete in 4.2) — the write surface that used
+# to produce these files (write_field/increment_field/append_to_section/
+# init_state_file) was deleted in the storage-conversion wave; this fixture
+# exists only to exercise state-io.sh's remaining read path
+# (read_field/read_section) until session-start drops its legacy reader.
 create_state_file() {
   local dir="$1" sid="$2"
   shift 2

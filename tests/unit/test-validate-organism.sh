@@ -11,24 +11,14 @@ source "$PLUGIN_ROOT/hooks/scripts/lib/validate-organism.sh"
 
 begin_suite "validate-organism"
 
-# --- clamp_field tests ---
-setup_test
-sf=$(create_state_file "$_TEST_TMPDIR/.claude" "clamp-test" "edits_since_last_commit=5")
-clamp_field "edits_since_last_commit" 0 1000 "$sf"
-result=$(read_field "edits_since_last_commit" "$sf")
-assert_eq "clamp_field_within_range" "5" "$result"
-
-setup_test
-sf=$(create_state_file "$_TEST_TMPDIR/.claude" "clamp-low" "edits_since_last_commit=-5")
-clamp_field "edits_since_last_commit" 0 1000 "$sf"
-result=$(read_field "edits_since_last_commit" "$sf")
-assert_eq "clamp_field_below_min" "0" "$result"
-
-setup_test
-sf=$(create_state_file "$_TEST_TMPDIR/.claude" "clamp-high" "edits_since_last_commit=9999")
-clamp_field "edits_since_last_commit" 0 1000 "$sf"
-result=$(read_field "edits_since_last_commit" "$sf")
-assert_eq "clamp_field_above_max" "1000" "$result"
+# CORTEX_PROJECT_DIR_OVERRIDE sandboxes _eio_sessions_dir/_eio_week_dir (event-io
+# path helpers validate_organism uses for week-dir pruning) to this suite's temp
+# dir for EVERY test below — including the pre-existing ones. Without this, the
+# week-dir pruning check would resolve against this repo's real
+# .claude/cortex/sessions/ (via git-toplevel fallback) and could delete real
+# session data older than 90 days. Never remove this without re-verifying no
+# validate_organism call in this file can escape the sandbox.
+export CORTEX_PROJECT_DIR_OVERRIDE="$_TEST_TMPDIR"
 
 # --- sanitize_json_field tests ---
 result=$(sanitize_json_field "normal string")
@@ -41,15 +31,7 @@ long_str=$(printf '%0.s-' {1..201})
 result=$(sanitize_json_field "$long_str")
 assert_eq "sanitize_json_field_too_long" "" "$result"
 
-# --- validate_organism tests ---
-setup_test
-override_state_paths "$_TEST_TMPDIR"
-sf=$(create_state_file "$_TEST_TMPDIR/.claude" "validate-org" "edits_since_last_commit=5000")
-STATE_FILE="$sf"
-result=$(validate_organism 2>/dev/null || echo "error")
-assert_contains "validate_clamps_large_edits" "$result" "clamped"
-
-# Health header recovery
+# --- validate_organism: health header recovery ---
 setup_test
 override_state_paths "$_TEST_TMPDIR"
 echo "# Health Log" > "$HEALTH_FILE"
@@ -63,7 +45,26 @@ else
   skip_test "validate_health_header_recovery" "health file not created"
 fi
 
-# Stale temp cleanup
+# --- validate_organism: health file pruning keeps last 200 rows ---
+setup_test
+override_state_paths "$_TEST_TMPDIR"
+{
+  echo "trend_direction=stable"
+  echo "avg_reasoning_misses=0.0"
+  echo "avg_edits_per_commit=0.0"
+  echo "avg_duration_min=0"
+  echo "---"
+  for i in $(seq 1 600); do
+    echo "2026-01-01|0|0.0|true|0|0|0|0|10|0|clean|"
+  done
+} > "$HEALTH_FILE"
+sf=$(create_state_file "$_TEST_TMPDIR/.claude" "health-prune")
+STATE_FILE="$sf"
+validate_organism 2>/dev/null || true
+data_row_count=$(grep -c '|' "$HEALTH_FILE" 2>/dev/null || echo 0)
+assert_eq "validate_health_pruning_keeps_200_rows" "200" "$data_row_count"
+
+# --- validate_organism: stale temp cleanup ---
 setup_test
 override_state_paths "$_TEST_TMPDIR"
 touch "$_TEST_TMPDIR/.claude/somefile.tmp.12345"
@@ -74,5 +75,47 @@ STATE_FILE="$sf"
 validate_organism 2>/dev/null || true
 # Can't reliably test cleanup on all platforms, just verify no crash
 assert_eq "validate_stale_temp_no_crash" "0" "0"
+
+# --- week-bucket dir pruning (>90 days) ---
+# A date well past the 90-day cutoff regardless of when this suite runs
+# (100 days ago always clears the 90-day threshold with margin).
+OLD_TS=$(date -d "100 days ago" +%Y%m%d0000 2>/dev/null || date -v-100d +%Y%m%d0000 2>/dev/null || echo "202001010000")
+
+# Old week dir (old dir mtime + old contained file mtime) is removed.
+setup_test
+override_state_paths "$_TEST_TMPDIR"
+old_dir="$(_eio_sessions_dir)/2020-W01"
+mkdir -p "$old_dir"
+touch "$old_dir/old-sid.local.md"
+touch -t "$OLD_TS" "$old_dir/old-sid.local.md"
+touch -t "$OLD_TS" "$old_dir"
+validate_organism >/dev/null 2>&1 || true
+result="present"; [ -d "$old_dir" ] || result="removed"
+assert_eq "week_dir_pruning_removes_old_dir" "removed" "$result"
+
+# Current week dir is never touched, even with artificially old mtimes.
+setup_test
+override_state_paths "$_TEST_TMPDIR"
+current_dir="$(_eio_week_dir)"
+mkdir -p "$current_dir"
+touch "$current_dir/current-sid.local.md"
+touch -t "$OLD_TS" "$current_dir/current-sid.local.md"
+touch -t "$OLD_TS" "$current_dir"
+validate_organism >/dev/null 2>&1 || true
+result="present"; [ -d "$current_dir" ] || result="removed"
+assert_eq "week_dir_pruning_never_touches_current_week" "present" "$result"
+
+# Old dir mtime but a recently-modified contained file => not prunable.
+setup_test
+override_state_paths "$_TEST_TMPDIR"
+mixed_dir="$(_eio_sessions_dir)/2020-W05"
+mkdir -p "$mixed_dir"
+touch "$mixed_dir/recent-sid.local.md"      # fresh mtime — left untouched
+touch -t "$OLD_TS" "$mixed_dir"             # dir mtime old, file mtime recent
+validate_organism >/dev/null 2>&1 || true
+result="present"; [ -d "$mixed_dir" ] || result="removed"
+assert_eq "week_dir_pruning_skips_dir_with_recent_file" "present" "$result"
+
+unset CORTEX_PROJECT_DIR_OVERRIDE
 
 end_suite

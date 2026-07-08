@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
-# Shared state file I/O — sourced by all hook scripts
-# Provides PROJECT_DIR, STATE_FILE, HEALTH_FILE, PROPOSALS_FILE constants
-# and functions for reading/writing the flat key=value state file.
+# Shared state file I/O — SANCTIONED LEGACY READER, sourced only by
+# hooks/session-start (until v4.2). Provides PROJECT_DIR, STATE_FILE,
+# HEALTH_FILE, PROPOSALS_FILE constants and READ-ONLY access to the flat
+# key=value state file.
 #
-# Session-scoped state files: each Claude Code session gets its own state file
+# The write surface (write_field, increment_field, append_to_section,
+# validate_state_file, init_state_file, resolve_state_file) was deleted —
+# hooks now write exclusively through the append-only event log
+# (hooks/scripts/lib/event-io.sh). What remains here reads whatever legacy
+# state files still exist on disk and migrates/cleans them up.
+#
+# Session-scoped state files: each Claude Code session got its own state file
 # (cortex-state-{session_id}.local.md) to avoid collisions when running
 # multiple sessions concurrently. Shared files (health, proposals, decisions)
 # remain singleton.
@@ -12,153 +19,12 @@ PROJECT_DIR="${CORTEX_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null |
 STATE_DIR="${PROJECT_DIR}/.claude"                      # UNCHANGED — other tools depend on this
 CORTEX_DIR="${STATE_DIR}/cortex"                        # NEW — cortex-specific subdir
 SESSIONS_DIR="${CORTEX_DIR}/sessions"                   # NEW — weekly-bucketed session files
-# STATE_FILE is set dynamically by resolve_state_file() or init_state_file()
-# Default fallback for scripts that don't call either:
+# STATE_FILE has no writer anymore; default fallback for scripts that read it
+# without resolving a specific session file:
 STATE_FILE="${SESSIONS_DIR}/fallback.local.md"
 HEALTH_FILE="${CORTEX_DIR}/health.local.md"
 PROPOSALS_FILE="${CORTEX_DIR}/proposals.local.md"
 DECISIONS_FILE="${CORTEX_DIR}/decisions.local.md"
-
-# get_week_dir — returns the ISO week directory path (YYYY-WNN)
-get_week_dir() {
-  local week
-  week=$(date +%G-W%V 2>/dev/null || date +%Y-W%V 2>/dev/null || echo "unknown")
-  echo "${SESSIONS_DIR}/${week}"
-}
-
-# resolve_state_file "json_input"
-# Extracts session_id from hook stdin JSON and sets STATE_FILE to the
-# session-scoped state file. Falls back to the newest state file if
-# session_id is not available.
-resolve_state_file() {
-  local json_input="${1:-}"
-  local sid=""
-
-  # Ensure directories exist (audit finding #1 — glob on non-existent dir returns nothing)
-  mkdir -p "$SESSIONS_DIR" 2>/dev/null || true
-
-  # Try to extract session_id from JSON input
-  if [ -n "$json_input" ]; then
-    # Try jq first, then python3, then bash
-    if command -v jq >/dev/null 2>&1; then
-      sid=$(echo "$json_input" | jq -r '.session_id // empty' 2>/dev/null)
-    fi
-    if [ -z "$sid" ] && command -v python3 >/dev/null 2>&1; then
-      sid=$(echo "$json_input" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null)
-    fi
-    if [ -z "$sid" ]; then
-      # Bash fallback
-      local tmp="${json_input#*\"session_id\":\"}"
-      if [ "$tmp" != "$json_input" ]; then
-        sid="${tmp%%\"*}"
-      fi
-    fi
-  fi
-
-  if [ -n "$sid" ]; then
-    # Try new week-dir layout first: sessions/YYYY-WNN/{sid}.local.md
-    STATE_FILE="$(get_week_dir)/${sid}.local.md"
-    if [ ! -f "$STATE_FILE" ]; then
-      # Search all week dirs for this session_id
-      local found=""
-      for d in "${SESSIONS_DIR}"/*/; do
-        [ -d "$d" ] || continue
-        if [ -f "${d}${sid}.local.md" ]; then
-          found="${d}${sid}.local.md"
-          break
-        fi
-      done
-      if [ -n "$found" ]; then
-        STATE_FILE="$found"
-      else
-        # Check legacy flat path (pre-v3.7 migration compat)
-        local legacy_flat="${STATE_DIR}/cortex-state-${sid}.local.md"
-        if [ -f "$legacy_flat" ]; then
-          STATE_FILE="$legacy_flat"
-        else
-          # Check legacy single file
-          local legacy="${STATE_DIR}/cortex-state.local.md"
-          if [ -f "$legacy" ]; then
-            local legacy_sid
-            legacy_sid=$(grep '^session_id=' "$legacy" 2>/dev/null | cut -d= -f2- | tr -d '\r')
-            if [ "$legacy_sid" = "$sid" ]; then
-              STATE_FILE="$legacy"
-            fi
-          fi
-        fi
-      fi
-    fi
-  else
-    # No session_id available — find the state file with the most activity
-    # Recency filter: only consider files modified in the last 2 hours
-    local best_file=""
-    local best_count=0
-    local now_epoch
-    now_epoch=$(date +%s 2>/dev/null || echo "0")
-    local cutoff_epoch=$((now_epoch - 7200))  # 2 hours ago
-
-    # Search new layout: sessions/*/*.local.md
-    for f in "${SESSIONS_DIR}"/*/*.local.md; do
-      [ -f "$f" ] || continue
-      local file_epoch=0
-      if command -v stat >/dev/null 2>&1; then
-        file_epoch=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo "0")
-      fi
-      if [ "$now_epoch" -gt 0 ] && [ "$file_epoch" -gt 0 ] && [ "$file_epoch" -lt "$cutoff_epoch" ]; then
-        continue
-      fi
-      local count=0
-      if sed -n '/^\[files_modified\]/,/^\[/{//!p;}' "$f" 2>/dev/null | grep -q . 2>/dev/null; then
-        count=$(sed -n '/^\[files_modified\]/,/^\[/{//!p;}' "$f" 2>/dev/null | grep -c .)
-      fi
-      if [ "$count" -gt "$best_count" ]; then
-        best_count=$count
-        best_file="$f"
-      fi
-    done
-
-    # Also search legacy flat layout (backward compat)
-    for f in "${STATE_DIR}"/cortex-state-*.local.md; do
-      [ -f "$f" ] || continue
-      local file_epoch=0
-      if command -v stat >/dev/null 2>&1; then
-        file_epoch=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo "0")
-      fi
-      if [ "$now_epoch" -gt 0 ] && [ "$file_epoch" -gt 0 ] && [ "$file_epoch" -lt "$cutoff_epoch" ]; then
-        continue
-      fi
-      local count=0
-      if sed -n '/^\[files_modified\]/,/^\[/{//!p;}' "$f" 2>/dev/null | grep -q . 2>/dev/null; then
-        count=$(sed -n '/^\[files_modified\]/,/^\[/{//!p;}' "$f" 2>/dev/null | grep -c .)
-      fi
-      if [ "$count" -gt "$best_count" ]; then
-        best_count=$count
-        best_file="$f"
-      fi
-    done
-
-    if [ -n "$best_file" ]; then
-      STATE_FILE="$best_file"
-    else
-      # All empty or all stale — fall back to newest across both layouts
-      local newest
-      newest=$(ls -t "${SESSIONS_DIR}"/*/*.local.md "${STATE_DIR}"/cortex-state-*.local.md 2>/dev/null | head -1 || true)
-      if [ -n "$newest" ]; then
-        STATE_FILE="$newest"
-      else
-        STATE_FILE="${SESSIONS_DIR}/fallback.local.md"
-      fi
-    fi
-  fi
-}
-
-# init_state_file "session_id"
-# Creates a new session-scoped state file in the current week dir.
-init_state_file() {
-  local sid="$1"
-  mkdir -p "$(get_week_dir)"
-  STATE_FILE="$(get_week_dir)/${sid}.local.md"
-}
 
 # cleanup_stale_state_files
 # Removes legacy FLAT state files from .claude/ root (migration leftovers).
@@ -342,47 +208,6 @@ read_field() {
   grep "^${field}=" "$file" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\r' || true
 }
 
-# write_field "field_name" "value" "file_path"
-# Overwrites a key=value field. Uses atomic temp+mv (NOT sed -i).
-# CONSTRAINT: values must not contain newlines or pipe characters.
-write_field() {
-  local field="$1"
-  local value="$2"
-  local file="${3:-$STATE_FILE}"
-  if [ ! -f "$file" ]; then return 0; fi
-  sed "s|^${field}=.*|${field}=${value}|" "$file" > "$file.tmp.$$" && mv "$file.tmp.$$" "$file"
-}
-
-# increment_field "field_name" "file_path"
-# Reads a numeric field, increments by 1, writes back.
-increment_field() {
-  local field="$1"
-  local file="${2:-$STATE_FILE}"
-  local current
-  current=$(read_field "$field" "$file")
-  current="${current:-0}"
-  # Guard: non-numeric → reset to 0 (prevents arithmetic crash with set -e)
-  case "$current" in *[!0-9]*) current=0 ;; esac
-  local next=$(( current + 1 ))
-  write_field "$field" "$next" "$file"
-}
-
-# append_to_section "section_name" "line_text" "file_path"
-# Appends line_text after the [section_name] header.
-# CONSTRAINT: line_text must not match ^\[.*\]$ pattern.
-append_to_section() {
-  local section="$1"
-  local line="$2"
-  local file="${3:-$STATE_FILE}"
-  if [ ! -f "$file" ]; then return 0; fi
-  # Use ENVIRON to pass line text — awk -v interprets backslash escapes,
-  # which mangles Windows paths (e.g., \Users → Users, \t → tab).
-  APPEND_LINE="$line" awk -v sect="[$section]" '
-    $0 == sect { print; print ENVIRON["APPEND_LINE"]; next }
-    { print }
-  ' "$file" > "$file.tmp.$$" && mv "$file.tmp.$$" "$file"
-}
-
 # read_section "section_name" "file_path"
 # Returns all lines between [section_name] and the next [section] header.
 read_section() {
@@ -390,34 +215,6 @@ read_section() {
   local file="${2:-$STATE_FILE}"
   if [ ! -f "$file" ]; then echo ""; return 0; fi
   awk '/^\['"$section"'\]/{found=1;next} /^\[.*\]$/{found=0} found' "$file" | tr -d '\r' | sed '/^$/d'
-}
-
-# validate_state_file "file_path"
-# Checks required fields exist. Re-adds missing ones with defaults.
-validate_state_file() {
-  local file="${1:-$STATE_FILE}"
-  if [ ! -f "$file" ]; then return 0; fi
-  local required_fields="session_id session_start model_name commits_count edits_since_last_commit tool_calls_count tests_run docs_updated carry_over_addressed stop_hook_active consecutive_blocks debug"
-  local defaults="unknown unknown unknown 0 0 0 false false false false 0 false"
-  local i=1
-  for field in $required_fields; do
-    local default_val
-    default_val=$(echo "$defaults" | cut -d' ' -f$i)
-    if ! grep -q "^${field}=" "$file" 2>/dev/null; then
-      # Append before first section header
-      sed "/^\[/i\\${field}=${default_val}" "$file" > "$file.tmp.$$" && mv "$file.tmp.$$" "$file"
-    fi
-    i=$((i + 1))
-  done
-
-  # Phase 1 fields — added separately to avoid empty-string positional parsing issues
-  for extra_field_pair in "test_files_this_session:" "root_cause_documented:false" "debug_hypotheses_count:0"; do
-    local fname="${extra_field_pair%%:*}"
-    local fdefault="${extra_field_pair#*:}"
-    if ! grep -q "^${fname}=" "$file" 2>/dev/null; then
-      sed "/^\[/i\\${fname}=${fdefault}" "$file" > "$file.tmp.$$" && mv "$file.tmp.$$" "$file"
-    fi
-  done
 }
 
 # normalize_path "path"

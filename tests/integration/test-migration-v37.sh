@@ -113,22 +113,7 @@ source "$TESTS_DIR/../hooks/scripts/lib/state-io.sh" 2>/dev/null || true
 # The flat file should still be there (not migrated)
 assert_file_exists "sentinel_prevents_remigration" "$_TEST_TMPDIR/.claude/cortex-state-should-stay.local.md"
 
-# Test 3: init_state_file creates in week dir
-setup_test
-unset _CORTEX_STATE_IO_MIGRATED 2>/dev/null || true
-export CORTEX_PROJECT_DIR="$_TEST_TMPDIR"
-mkdir -p "$_TEST_TMPDIR/.claude/cortex"
-echo "migrated" > "$_TEST_TMPDIR/.claude/cortex/.migrated-v3.7"
-source "$TESTS_DIR/../hooks/scripts/lib/state-io.sh" 2>/dev/null || true
-init_state_file "new-session-123"
-# STATE_FILE should be under sessions/YYYY-WNN/
-assert_contains "init_creates_in_week_dir" "$STATE_FILE" "sessions/"
-assert_contains "init_uses_session_id" "$STATE_FILE" "new-session-123.local.md"
-# Directory should have been created
-week_dir=$(dirname "$STATE_FILE")
-assert_eq "week_dir_created" "yes" "$([ -d "$week_dir" ] && echo yes || echo no)"
-
-# Test 4: get_profile reads from cortex/profile.local
+# Test 3: get_profile reads from cortex/profile.local
 setup_test
 unset _CORTEX_STATE_IO_MIGRATED 2>/dev/null || true
 export CORTEX_PROJECT_DIR="$_TEST_TMPDIR"

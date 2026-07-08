@@ -43,4 +43,40 @@ assert_eq "scanner_catches_bypass_variants" "4" "$hit_count"
 assert_not_contains "scanner_skips_comments_and_clean" "$hits" "e.sh"
 assert_not_contains "scanner_skips_guarded_form" "$hits" "f.sh"
 
+# --- deleted state-io write surface must never reappear (comment-line-tolerant) ---
+# write_field/increment_field/append_to_section/resolve_state_file/
+# init_state_file/validate_state_file were deleted from state-io.sh in the
+# storage-conversion wave (Task 10) — hooks write exclusively through the
+# append-only event log now. Their DEFINITIONS may only remain in state-io.sh
+# itself (which the deletion left with read_field/read_section/get_profile/
+# cleanup_stale_state_files/migrate_state_files/normalize_path).
+# \y is gawk's word-boundary token (Git Bash ships gawk) — keeps e.g.
+# my_write_field_wrapper from false-positiving while still catching bare calls.
+scan_for_deleted_state_io_calls() {
+  awk '
+    { sub(/\r$/, "") }
+    /^[[:space:]]*#/ { next }
+    /\y(write_field|increment_field|append_to_section|resolve_state_file|init_state_file|validate_state_file)\y/ {
+      printf "%s:%d:%s\n", FILENAME, FNR, $0
+    }
+  ' "$@" 2>/dev/null
+}
+
+mapfile -t hook_files_all < <(find "$PLUGIN_ROOT/hooks" -type f \( -name '*.sh' -o -name 'session-start' \) ! -name 'state-io.sh')
+hits=$(scan_for_deleted_state_io_calls "${hook_files_all[@]}")
+assert_eq "no_deleted_state_io_write_calls_outside_state_io" "" "$hits"
+
+# --- scanner catches a planted violation (fixture) ---
+FIX2=$(mktemp -d)
+printf 'write_field "commits_count" "1" "$STATE_FILE"\n' > "$FIX2/violation.sh"
+printf '# write_field is mentioned only in a comment here\nok=1\n' > "$FIX2/clean-comment.sh"
+printf 'result=$(read_field "session_id" "$STATE_FILE")\n' > "$FIX2/clean-read.sh"
+
+hits2=$(scan_for_deleted_state_io_calls "$FIX2"/*.sh)
+hit_count2=$(printf '%s' "$hits2" | awk 'NF { c++ } END { print c + 0 }')
+assert_eq "scanner_catches_planted_violation" "1" "$hit_count2"
+assert_contains "scanner_flags_violation_file" "$hits2" "violation.sh"
+assert_not_contains "scanner_skips_comment_only_mention" "$hits2" "clean-comment.sh"
+assert_not_contains "scanner_skips_unrelated_read_call" "$hits2" "clean-read.sh"
+
 end_suite
