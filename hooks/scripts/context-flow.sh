@@ -12,6 +12,16 @@ source "$SCRIPT_DIR/lib/escape-json.sh" || { printf '{}'; exit 0; }
 
 CONTEXT_DIR="$SCRIPT_DIR/../../context"
 
+# --native flag (Task 5: native hooks.json registration): consumed before any
+# other arg handling — sensory-check's `--mid-session "$INPUT"` invocation
+# below is a SEPARATE script call, unaffected by this flag. Its ABSENCE plus
+# the native-hooks.ok marker (written every session by session-start once its
+# opt-in gate passes) means this invocation is the stale
+# ~/.claude/settings.json bootstrap-hooks.sh entry firing alongside the
+# native hooks.json registration — see the native-suppression check below.
+NATIVE=false
+[ "${1:-}" = "--native" ] && { NATIVE=true; shift; }
+
 # Read stdin JSON, resolve session-scoped event log, extract user_prompt
 INPUT=$(cat)
 
@@ -19,6 +29,16 @@ INPUT=$(cat)
 # existence is NOT the signal — only the explicit sentinel file, written by
 # /cortex:setup or session-start's grandfathering check.
 [ -f "$(_eio_cortex_dir)/enabled" ] || { printf '{}'; exit 0; }
+
+# Native dual-fire suppression (spec §4.2): invoked WITHOUT --native while the
+# native-hooks.ok marker is present means this is the stale settings.json
+# bootstrap entry firing alongside the native hooks.json registration —
+# suppress it so the event doesn't get appended twice. No marker present means
+# a pre-4.0 install (compat window): proceed normally.
+if [ "$NATIVE" != true ] && [ -f "$(_eio_cortex_dir)/native-hooks.ok" ]; then
+  printf '{}'
+  exit 0
+fi
 
 resolve_event_log "$INPUT"
 PROMPT=$(printf '%s' "$INPUT" | extract_json_field "user_prompt")

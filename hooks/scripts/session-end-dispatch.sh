@@ -4,6 +4,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$SCRIPT_DIR/lib/event-io.sh" || { printf '{}'; exit 0; }
 
+# --native flag (Task 5: native hooks.json registration): consumed before any
+# other arg handling. Its ABSENCE plus the native-hooks.ok marker (written
+# every session by session-start once its opt-in gate passes) means this
+# invocation is the stale ~/.claude/settings.json bootstrap-hooks.sh entry
+# firing alongside the native hooks.json registration — see the
+# native-suppression check below.
+NATIVE=false
+[ "${1:-}" = "--native" ] && { NATIVE=true; shift; }
+
 # Buffer stdin (SessionEnd may or may not provide JSON)
 INPUT=$(cat)
 
@@ -11,6 +20,16 @@ INPUT=$(cat)
 # existence is NOT the signal — only the explicit sentinel file, written by
 # /cortex:setup or session-start's grandfathering check.
 [ -f "$(_eio_cortex_dir)/enabled" ] || { printf '{}'; exit 0; }
+
+# Native dual-fire suppression (spec §4.2): invoked WITHOUT --native while the
+# native-hooks.ok marker is present means this is the stale settings.json
+# bootstrap entry firing alongside the native hooks.json registration —
+# suppress it so the event doesn't get appended twice. No marker present means
+# a pre-4.0 install (compat window): proceed normally.
+if [ "$NATIVE" != true ] && [ -f "$(_eio_cortex_dir)/native-hooks.ok" ]; then
+  printf '{}'
+  exit 0
+fi
 
 # Resolve session-scoped event log from session_id in hook JSON. This script
 # WRITES (health_written event), so it must use the write resolver — the
