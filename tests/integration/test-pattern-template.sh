@@ -10,6 +10,14 @@ begin_suite "pattern-template"
 
 SANDBOX=$(setup_script_sandbox "$_TEST_TMPDIR")
 
+# setup_script_sandbox exports CORTEX_PROJECT_DIR internally, but that export
+# runs inside the $(...) subshell above and never reaches this shell.
+# pattern-template.sh now derives PROJECT_DIR via event-io.sh's
+# eio_project_dir() (resolved from this env var at call time), not from the
+# sandbox's sed-patched state-io.sh copy — so it must be set here explicitly
+# (same pattern as tests/integration/test-post-dispatch.sh).
+export CORTEX_PROJECT_DIR="$_TEST_TMPDIR"
+
 # Helper: run pattern-template with a given file path
 run_pattern_template() {
   local file_path="$1"
