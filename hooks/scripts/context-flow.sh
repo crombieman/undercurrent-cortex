@@ -22,7 +22,7 @@ PROMPT=$(printf '%s' "$INPUT" | extract_json_field "user_prompt")
 
 PROJECT_DIR="$(eio_project_dir)"
 STATE_DIR="${PROJECT_DIR}/.claude"
-PROPOSALS_FILE="${STATE_DIR}/cortex/proposals.local.md"
+PROPOSALS_FILE="$(eio_proposals_file)"
 
 # Profile check for proposal handling (strict only)
 PROFILE=$(eio_get_profile)

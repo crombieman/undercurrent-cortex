@@ -29,10 +29,19 @@ if [ -n "$HOOK_INPUT" ]; then
     HOOK_SESSION_ID=$(echo "$HOOK_INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null || true)
   fi
   if [ -z "$HOOK_SESSION_ID" ]; then
-    local_tmp="${HOOK_INPUT#*\"session_id\":\"}"
-    if [ "$local_tmp" != "$HOOK_INPUT" ]; then
-      HOOK_SESSION_ID="${local_tmp%%\"*}"
-    fi
+    # POSIX-awk match() + first-line-first-match: tolerates pretty-printed
+    # JSON (spaces/newlines around ":") and prefers the FIRST occurrence of a
+    # duplicated key. No jq/python3 dependency — this tier must stand alone
+    # (Codex I-3). Mirrors event-io.sh's resolve_event_log.
+    HOOK_SESSION_ID=$(printf '%s' "$HOOK_INPUT" | awk '
+      match($0, /"session_id"[[:space:]]*:[[:space:]]*"[^"]*"/) {
+        s = substr($0, RSTART, RLENGTH)
+        sub(/^"session_id"[[:space:]]*:[[:space:]]*"/, "", s)
+        sub(/"$/, "", s)
+        print s
+        exit
+      }
+    ' 2>/dev/null) || true
   fi
 fi
 # Fallback: epoch + PID if no session_id from Claude Code. The `-$$` suffix makes

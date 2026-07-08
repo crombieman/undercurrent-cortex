@@ -42,15 +42,31 @@ except:
     fi
   fi
 
-  # Tier 3: bash string ops (leaf key only — no nesting support)
+  # Tier 3: bash/awk string ops (leaf key only — no nesting support).
+  # POSIX-awk match() + first-line-first-match: tolerates pretty-printed JSON
+  # (spaces/newlines around ":") and prefers the FIRST occurrence of a
+  # duplicated key, mirroring event-io.sh's resolve_event_log. No jq/python3
+  # dependency — this tier must stand alone (Codex I-3).
   local leaf_key="${field##*.}"
-  local tmp="${input#*\"${leaf_key}\":\"}"
-  if [ "$tmp" = "$input" ]; then
+  local result
+  result=$(printf '%s' "$input" | LEAF_KEY="$leaf_key" awk '
+    {
+      key = ENVIRON["LEAF_KEY"]
+      pat = "\"" key "\"[[:space:]]*:[[:space:]]*\"[^\"]*\""
+      if (match($0, pat)) {
+        s = substr($0, RSTART, RLENGTH)
+        sub("^\"" key "\"[[:space:]]*:[[:space:]]*\"", "", s)
+        sub(/"$/, "", s)
+        print s
+        exit
+      }
+    }
+  ' 2>/dev/null) || true
+  if [ -z "$result" ]; then
     # Key not found
     echo ""
     return 0
   fi
-  local result="${tmp%%\"*}"
   # Unescape basic JSON escapes
   result="${result//\\\"/\"}"
   result="${result//\\\\/\\}"

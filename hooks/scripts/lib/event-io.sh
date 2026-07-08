@@ -35,8 +35,19 @@ resolve_event_log() {
       sid=$(printf '%s' "$json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null || true)
     fi
     if [ -z "$sid" ]; then
-      local tmp="${json#*\"session_id\":\"}"
-      [ "$tmp" != "$json" ] && sid="${tmp%%\"*}"
+      # POSIX-awk match() + first-line-first-match: tolerates pretty-printed
+      # JSON (spaces/newlines around ":") and prefers the FIRST occurrence of
+      # a duplicated key. No jq/python3 dependency — this tier must stand
+      # alone (Codex I-3).
+      sid=$(printf '%s' "$json" | awk '
+        match($0, /"session_id"[[:space:]]*:[[:space:]]*"[^"]*"/) {
+          s = substr($0, RSTART, RLENGTH)
+          sub(/^"session_id"[[:space:]]*:[[:space:]]*"/, "", s)
+          sub(/"$/, "", s)
+          print s
+          exit
+        }
+      ' 2>/dev/null) || true
     fi
   fi
   [ -z "$sid" ] && return 0
@@ -153,6 +164,19 @@ list_events() {
 # Public alias for _eio_project_dir (echoes the project root).
 eio_project_dir() {
   _eio_project_dir
+}
+
+# eio_health_file / eio_proposals_file
+# Public path-constant helpers — thin wrappers over the cortex dir (W4:
+# consolidates the ".claude/cortex/<file>" derivation that used to be
+# re-inlined independently in context-flow.sh, statusline.sh, and
+# session-end-dispatch.sh).
+eio_health_file() {
+  echo "$(_eio_cortex_dir)/health.local.md"
+}
+
+eio_proposals_file() {
+  echo "$(_eio_cortex_dir)/proposals.local.md"
 }
 
 # eio_get_profile

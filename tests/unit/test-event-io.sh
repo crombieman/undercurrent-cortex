@@ -124,6 +124,51 @@ resolve_event_log '{"no_sid":"here"}'
 assert_eq "write_resolution_never_uses_marker" "" "$EVENT_LOG"
 unset CORTEX_PROJECT_DIR_OVERRIDE
 
+# --- resolve_event_log: tier-3 (bash/awk) fallback ALONE resolves pretty JSON.
+# jq/python3 are shadowed with functions that fail closed (return 127, mimicking
+# "command not found" once invoked). NOTE: `command -v jq` still reports success
+# for a defined function (same as it would for a real binary) — that's fine and
+# expected; what actually forces the fallthrough is that CALLING jq/python3
+# fails, which the tier 1/2 blocks' `2>/dev/null || true` swallows exactly like
+# a malformed-JSON parser error. export -f makes the stubs visible to any child
+# bash process too (not required here — resolve_event_log runs in-process —
+# but keeps the pattern reusable). Deliberately NOT using mock-commands.sh's
+# setup_mock_path/hide_command: that helper's `export PATH=` runs inside the
+# `$(...)` command substitution that captures its echoed mock-bin path, i.e.
+# inside a subshell, so the PATH mutation never reaches the caller (verified:
+# `M=$(setup_mock_path "$T"); hide_command "$M" python3` leaves a REAL python3
+# resolvable afterward on any box that has one installed). See task report.
+jq() { return 127; }
+python3() { return 127; }
+export -f jq python3
+
+# Verify the masking actually took (invoking jq/python3 must fail) — a false
+# pass here would mean the tests below aren't exercising tier 3 at all.
+jq_masked=no; jq >/dev/null 2>&1 || jq_masked=yes
+py_masked=no; python3 >/dev/null 2>&1 || py_masked=yes
+assert_eq "tier3_test_jq_masked" "yes" "$jq_masked"
+assert_eq "tier3_test_python3_masked" "yes" "$py_masked"
+
+TDIR5=$(mktemp -d)
+f5=$(create_event_log "$TDIR5/.claude" "sid-tier3")
+CORTEX_PROJECT_DIR_OVERRIDE="$TDIR5"
+resolve_event_log "$(printf '{\n  "session_id": "sid-tier3",\n  "tool_name": "Bash"\n}')"
+assert_eq "resolve_pretty_json_tier3_only" "$f5" "$EVENT_LOG"
+unset CORTEX_PROJECT_DIR_OVERRIDE
+
+# --- resolve_event_log: tier-3 fallback takes the FIRST occurrence when a key
+# is duplicated (compact JSON) — real parsers keep the LAST duplicate key by
+# convention, which would mask a tier-3 regression here. jq/python3 remain
+# masked from the block above.
+TDIR6=$(mktemp -d)
+f6=$(create_event_log "$TDIR6/.claude" "dup-first")
+CORTEX_PROJECT_DIR_OVERRIDE="$TDIR6"
+resolve_event_log '{"session_id":"dup-first","other":"x","session_id":"dup-second"}'
+assert_eq "resolve_duplicate_key_first_wins" "$f6" "$EVENT_LOG"
+unset CORTEX_PROJECT_DIR_OVERRIDE
+
+unset -f jq python3
+
 # --- eio_project_dir / eio_get_profile / eio_item_hash (wave 2) ---
 TDIR4=$(mktemp -d)
 CORTEX_PROJECT_DIR_OVERRIDE="$TDIR4"

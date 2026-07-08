@@ -29,8 +29,16 @@ if [ -d "$EVENT_LOG_PROJECT_DIR/memory" ]; then
   PROJECT_DIR="$EVENT_LOG_PROJECT_DIR"
 fi
 
-CORTEX_DIR="${PROJECT_DIR}/.claude/cortex"
-HEALTH_FILE="${CORTEX_DIR}/health.local.md"
+# HEALTH_FILE/CROSS_FILE deliberately do NOT derive from the locally-resolved
+# (possibly EVENT_LOG-overridden) PROJECT_DIR above — they go through the W4
+# global helpers instead, which re-resolve via _eio_project_dir(). Those two
+# are always equal within a single invocation: resolve_event_log(), which
+# located EVENT_LOG, and _eio_project_dir() both key off the same
+# CORTEX_PROJECT_DIR_OVERRIDE/CORTEX_PROJECT_DIR/git-rev-parse chain in this
+# same process, so EVENT_LOG_PROJECT_DIR (walked back up from EVENT_LOG's own
+# path) can only diverge from _eio_project_dir() on symlink/path-canonicalization
+# edge cases the Bug-4 override was never observed to hit — see task report.
+HEALTH_FILE="$(eio_health_file)"
 
 # --- Compute metrics ---
 today=$(date +%Y-%m-%d)
@@ -135,7 +143,7 @@ fi
 # --- Cross-session file tracking (runs before zero-metric skip) ---
 # Cross-session tracks file edit patterns across sessions — this should happen
 # regardless of whether we write a health row. Moved before zero-metric exit.
-CROSS_FILE="${CORTEX_DIR}/cross-session.local.md"
+CROSS_FILE="$(_eio_cortex_dir)/cross-session.local.md"
 if [ ! -f "$CROSS_FILE" ]; then
   {
     echo "# Cross-Session File Edit Tracker"

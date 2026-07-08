@@ -55,6 +55,29 @@ assert_eq "extract_from_large_json" "found" "$result"
 
 restore_path
 
+# --- Tier-3 pretty-JSON tolerance (Codex I-3): jq/python3 shadowed with
+# functions that fail closed (return 127) rather than mock-commands.sh's
+# setup_mock_path/hide_command. That helper exports PATH from inside the
+# $(...) command substitution used to capture its echoed mock-bin path — i.e.
+# inside a subshell — so the mutation never reaches this caller (verified: on
+# a box with a real python3 installed, `mock_bin=$(setup_mock_path ...);
+# hide_command "$mock_bin" python3` leaves python3 fully resolvable
+# afterward). The masked tests above/below only prove the bash fallback VALUE
+# is correct, not that tier 3 alone produced it, whenever a real python3 is
+# on PATH — jq's absence on this dev box was hiding that gap. See task report.
+jq() { return 127; }
+python3() { return 127; }
+export -f jq python3
+jq_masked=no; jq >/dev/null 2>&1 || jq_masked=yes
+py_masked=no; python3 >/dev/null 2>&1 || py_masked=yes
+assert_eq "tier3_pretty_jq_masked" "yes" "$jq_masked"
+assert_eq "tier3_pretty_python3_masked" "yes" "$py_masked"
+
+load_extract
+result=$(printf '{\n  "tool_input": {\n    "file_path": "src/pretty.ts"\n  }\n}' | extract_json_field "tool_input.file_path")
+assert_eq "extract_tier3_pretty_nested" "src/pretty.ts" "$result"
+unset -f jq python3
+
 mock_bin=$(setup_mock_path "$_TEST_TMPDIR")
 hide_command "$mock_bin" "jq"
 

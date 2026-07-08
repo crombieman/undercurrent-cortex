@@ -211,6 +211,30 @@ set -e
 assert_eq "malformed_stdin_exit_0" "0" "$rc"
 assert_json_valid "malformed_stdin_valid_json" "$result"
 
+# --- Test 12b: pretty-printed stdin + jq/python3 masked → tier-3 bash/awk
+# fallback alone extracts session_id and the log is created with the correct
+# sid (Codex I-3, end-to-end). Uses a scoped mock-bin with its own PATH
+# prepend/restore (not the suite-level MOCK_BIN) so other tests in this file
+# keep real jq/python3 + git/gh available. Direct `export PATH=` (not
+# mock-commands.sh's setup_mock_path) — that helper exports PATH from inside
+# the $(...) command substitution used to capture its echoed mock-bin path,
+# i.e. inside a subshell, so the mutation never reaches the caller; see task
+# report.
+setup_test
+sid="ss-pretty-tier3"
+TIER3_MOCK="$_TEST_TMPDIR/tier3-mock-bin"
+mkdir -p "$TIER3_MOCK"
+hide_command "$TIER3_MOCK" "jq"
+hide_command "$TIER3_MOCK" "python3"
+SAVED_PATH_TIER3="$PATH"
+export PATH="$TIER3_MOCK:$PATH"
+pretty_json=$(printf '{\n  "session_id": "%s",\n  "source": "startup"\n}' "$sid")
+printf '%s' "$pretty_json" | HOME="$_TEST_TMPDIR" bash "$SANDBOX/hooks/session-start" > /dev/null 2>&1 || true
+export PATH="$SAVED_PATH_TIER3"
+NEW_LOG="$(_eio_week_dir)/${sid}.events.log"
+assert_file_exists "pretty_json_tier3_creates_log" "$NEW_LOG"
+assert_eq "pretty_json_tier3_correct_sid" "$sid" "$(basename "$NEW_LOG" .events.log)"
+
 # --- Test 13: a pre-existing event log is NOT clobbered by a same-sid start ---
 # session-start must skip the `>` create when the log already exists, so prior
 # events (e.g. from a resumed session with the same id) survive.

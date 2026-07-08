@@ -10,9 +10,8 @@ source "$SCRIPT_DIR/lib/event-io.sh" || exit 0
 resolve_event_log_readonly "${1:-}"
 
 PROJECT_DIR="$(eio_project_dir)"
-CORTEX_DIR="${PROJECT_DIR}/.claude/cortex"
-HEALTH_FILE="${CORTEX_DIR}/health.local.md"
-PROPOSALS_FILE="${CORTEX_DIR}/proposals.local.md"
+HEALTH_FILE="$(eio_health_file)"
+PROPOSALS_FILE="$(eio_proposals_file)"
 
 # --- Line 1 data: session activity ---
 edits=$(count_events file_edit r commit)
