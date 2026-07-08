@@ -147,10 +147,24 @@ if [ -n "$event_unresolved" ]; then
   old_carry_over="${old_carry_over}${event_unresolved}"$'\n'
 fi
 
+# Precompute the unresolved items' hashes once for the survival loop below.
+# Membership MUST compare hashes, not raw text: eio_item_hash trims whitespace
+# precisely because LLM-typed carry-over drifts — the same logical item can be
+# carried whitespace-padded in one log and trimmed in another (hash-equal,
+# text-unequal), and eio_unresolved_items dedups by hash keeping only the
+# FIRST-SEEN text variant. A raw-text check would miss the padded variant and
+# drop that log's age from the max (crediting e.g. 2 instead of 7).
+event_unresolved_hashes=""
+if [ -n "$event_unresolved" ]; then
+  while IFS= read -r _uit; do
+    [ -z "$_uit" ] && continue
+    event_unresolved_hashes="${event_unresolved_hashes}$(eio_item_hash "$_uit")"$'\n'
+  done <<< "$event_unresolved"
+fi
+
 # Age max, second pass: include a log's age ONLY if at least one of its own
-# carry_over items is in the global unresolved set (per-log survival against the
-# global reconciliation — items flow verbatim, so text membership == hash
-# membership here).
+# carry_over items' hashes is in the global unresolved set (per-log survival
+# against the global reconciliation).
 event_carry_age="0"
 _elog_n=${#_elog_age[@]}
 _elog_i=0
@@ -158,10 +172,11 @@ while [ "$_elog_i" -lt "$_elog_n" ]; do
   _li="${_elog_items[$_elog_i]}"
   _la="${_elog_age[$_elog_i]}"
   _survives=0
-  if [ -n "$_li" ] && [ -n "$event_unresolved" ]; then
+  if [ -n "$_li" ] && [ -n "$event_unresolved_hashes" ]; then
     while IFS= read -r _it; do
       [ -z "$_it" ] && continue
-      if printf '%s\n' "$event_unresolved" | grep -qxF "$_it"; then
+      _ih=$(eio_item_hash "$_it")
+      if printf '%s' "$event_unresolved_hashes" | grep -qxF "$_ih"; then
         _survives=1
         break
       fi

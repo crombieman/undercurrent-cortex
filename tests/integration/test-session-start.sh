@@ -261,5 +261,30 @@ assert_eq "age_counts_only_surviving_logs" "1" "$(last_event carry_over_age "$NE
 assert_contains "fresh_item_survives" "$new_items" "Fresh surviving item bbb"
 assert_not_contains "stale_addressed_item_suppressed" "$new_items" "Stale addressed item aaa"
 
+# --- Test 15b: age survival compares HASHES, not raw text (whitespace drift) ---
+# eio_item_hash trims whitespace precisely because LLM-typed carry-over drifts:
+# the same logical item may be carried whitespace-padded in one log and trimmed
+# in another (hash-equal, text-unequal). The unresolved set dedups by hash and
+# keeps only the FIRST-SEEN text variant — so a raw-text survival check misses
+# the padded variant in the later-scanned log and drops its age.
+# Fixture: age-drift-1 (scanned first, glob order) carries the item unpadded
+# with age 1; age-drift-2 carries the SAME item with trailing spaces and age 6.
+# Nothing addressed => the item survives. Both logs must be credited:
+# new age = max(6,1)+1 = 7 — NOT 2 (text comparison credits only age-drift-1).
+setup_test
+sid="ss-age-drift"
+ditem="- Whitespace drift item ddd"
+create_event_log "$_TEST_TMPDIR/.claude" "age-drift-1" \
+  "1700000100|carry_over|$ditem" \
+  "1700000101|carry_over_age|1" > /dev/null
+create_event_log "$_TEST_TMPDIR/.claude" "age-drift-2" \
+  "1700000200|carry_over|${ditem}   " \
+  "1700000201|carry_over_age|6" > /dev/null
+result=$(run_session_start "$(mock_json "session_id=$sid")")
+NEW_LOG="$(_eio_week_dir)/${sid}.events.log"
+assert_eq "age_survival_matches_by_hash_not_text" "7" "$(last_event carry_over_age "$NEW_LOG")"
+assert_contains "whitespace_drift_item_still_resurfaces" \
+  "$(list_events carry_over "$NEW_LOG")" "Whitespace drift item ddd"
+
 export PATH="$SAVED_PATH"
 end_suite
