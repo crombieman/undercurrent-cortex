@@ -10,10 +10,20 @@ set -euo pipefail
 # one stale (settings.json bootstrap entry, no --native).
 #
 # For each of the 6 dispatchers that accept --native, this proves the pair
-# collapses to exactly ONE net effect (not zero, not two) regardless of which
-# one contributes it, and that BOTH invocations independently satisfy the
-# hook contract (exit 0, valid JSON) — a stale invocation must degrade
-# gracefully to {}, never crash or emit malformed output.
+# collapses to exactly ONE net effect WITH THE CORRECT DIRECTIONALITY — the
+# NATIVE invocation contributes it and the STALE invocation contributes
+# nothing and outputs bare {} — and that BOTH invocations independently
+# satisfy the hook contract (exit 0, valid JSON).
+#
+# Mutation-hardening note: a pair-nets-to-one assertion ALONE is blind to an
+# inverted suppression condition ([ "$NATIVE" != true ] → [ = true ]): the
+# pair still nets to one (native suppressed, stale proceeding), and for
+# payloads whose normal-path output is {} anyway (post-dispatch Bash echo,
+# stop-gate clean approve, pre-dispatch ExitPlanMode, session-end happy
+# path), even asserting OUT_STALE == "{}" stays green under the mutation.
+# The load-bearing directional check is therefore the MID-PAIR discriminator
+# sample: native alone must contribute exactly 1, stale alone exactly 0.
+# (Verified RED against exactly that mutation — see task-7-report.md.)
 #
 # Scripts are invoked DIRECTLY against the real plugin (mirrors
 # tests/integration/test-native-marker.sh and test-opt-in-gate.sh) —
@@ -46,15 +56,24 @@ stamp_native_marker() {
   printf '3.18.1 2026-07-08T00:00:00Z\n' > "$claude_dir/cortex/native-hooks.ok"
 }
 
-# run_pair <script> <proj> <json> [extra-args...]
-# Invokes <script>.sh WITH --native, then WITHOUT --native (the stale
-# settings.json bootstrap entry), same payload both times, in that order.
-# Sets OUT_NATIVE/RC_NATIVE/OUT_STALE/RC_STALE globals.
-run_pair() {
+# run_native / run_stale <script> <proj> <json>
+# Split into two calls (not one run_pair) so each block can sample its
+# discriminator BETWEEN the invocations — the mid-pair sample is what makes
+# the directionality assertions possible (see mutation-hardening note above).
+# run_native invokes WITH --native (the hooks.json registration) and sets
+# OUT_NATIVE/RC_NATIVE; run_stale invokes WITHOUT --native (the stale
+# settings.json bootstrap entry) and sets OUT_STALE/RC_STALE.
+run_native() {
   local script="$1" proj="$2" json="$3"
   set +e
   OUT_NATIVE=$(printf '%s' "$json" | CORTEX_PROJECT_DIR="$proj" bash "$PLUGIN_ROOT/hooks/scripts/${script}.sh" --native 2>/dev/null)
   RC_NATIVE=$?
+  set -e
+}
+
+run_stale() {
+  local script="$1" proj="$2" json="$3"
+  set +e
   OUT_STALE=$(printf '%s' "$json" | CORTEX_PROJECT_DIR="$proj" bash "$PLUGIN_ROOT/hooks/scripts/${script}.sh" 2>/dev/null)
   RC_STALE=$?
   set -e
@@ -91,11 +110,15 @@ stamp_native_marker "$PROJ/.claude"
 json=$(mock_json "tool_name=ExitPlanMode" "session_id=$SID")
 
 before=$(count_events plan_mode '' '' "$LOG")
-run_pair "pre-dispatch" "$PROJ" "$json"
+run_native "pre-dispatch" "$PROJ" "$json"
+mid=$(count_events plan_mode '' '' "$LOG")
+run_stale "pre-dispatch" "$PROJ" "$json"
 after=$(count_events plan_mode '' '' "$LOG")
 
 assert_pair_contract "pre_dispatch"
-assert_net_delta "pre_dispatch_pair_exactly_one_plan_mode_event" "1" "$before" "$after"
+assert_net_delta "pre_dispatch_native_contributes_the_plan_mode_event" "1" "$before" "$mid"
+assert_net_delta "pre_dispatch_stale_contributes_nothing" "0" "$mid" "$after"
+assert_eq "pre_dispatch_stale_suppressed_returns_empty" "{}" "$OUT_STALE"
 
 # ============================================================================
 # 2. post-dispatch.sh — discriminator: tool_call event (Bash payload).
@@ -108,11 +131,15 @@ stamp_native_marker "$PROJ/.claude"
 json=$(mock_json "tool_name=Bash" "session_id=$SID" "tool_input.command=echo hi")
 
 before=$(count_events tool_call '' '' "$LOG")
-run_pair "post-dispatch" "$PROJ" "$json"
+run_native "post-dispatch" "$PROJ" "$json"
+mid=$(count_events tool_call '' '' "$LOG")
+run_stale "post-dispatch" "$PROJ" "$json"
 after=$(count_events tool_call '' '' "$LOG")
 
 assert_pair_contract "post_dispatch"
-assert_net_delta "post_dispatch_pair_exactly_one_tool_call_event" "1" "$before" "$after"
+assert_net_delta "post_dispatch_native_contributes_the_tool_call_event" "1" "$before" "$mid"
+assert_net_delta "post_dispatch_stale_contributes_nothing" "0" "$mid" "$after"
+assert_eq "post_dispatch_stale_suppressed_returns_empty" "{}" "$OUT_STALE"
 
 # ============================================================================
 # 3. context-flow.sh — context-flow appends NO event on the "[decision]"
@@ -129,7 +156,8 @@ create_event_log "$PROJ/.claude" "$SID" > /dev/null
 stamp_native_marker "$PROJ/.claude"
 json=$(mock_json "user_prompt=[decision] use Postgres for this" "session_id=$SID")
 
-run_pair "context-flow" "$PROJ" "$json"
+run_native "context-flow" "$PROJ" "$json"
+run_stale "context-flow" "$PROJ" "$json"
 
 assert_pair_contract "context_flow"
 assert_eq "context_flow_stale_suppressed_returns_empty" "{}" "$OUT_STALE"
@@ -148,11 +176,15 @@ stamp_native_marker "$PROJ/.claude"
 json=$(mock_json "session_id=$SID")
 
 before=$(( $(count_events stop_approved '' '' "$LOG") + $(count_events stop_blocked '' '' "$LOG") ))
-run_pair "stop-gate" "$PROJ" "$json"
+run_native "stop-gate" "$PROJ" "$json"
+mid=$(( $(count_events stop_approved '' '' "$LOG") + $(count_events stop_blocked '' '' "$LOG") ))
+run_stale "stop-gate" "$PROJ" "$json"
 after=$(( $(count_events stop_approved '' '' "$LOG") + $(count_events stop_blocked '' '' "$LOG") ))
 
 assert_pair_contract "stop_gate"
-assert_net_delta "stop_gate_pair_exactly_one_decision_event" "1" "$before" "$after"
+assert_net_delta "stop_gate_native_contributes_the_decision_event" "1" "$before" "$mid"
+assert_net_delta "stop_gate_stale_contributes_nothing" "0" "$mid" "$after"
+assert_eq "stop_gate_stale_suppressed_returns_empty" "{}" "$OUT_STALE"
 
 # ============================================================================
 # 5. session-end-dispatch.sh — discriminator: exactly one health row for
@@ -169,12 +201,27 @@ json=$(mock_json "session_id=$SID")
 HEALTH_FILE="$PROJ/.claude/cortex/health.local.md"
 TODAY=$(date +%Y-%m-%d)
 
-before=$(grep -c "^${TODAY}|" "$HEALTH_FILE" 2>/dev/null || echo 0)
-run_pair "session-end-dispatch" "$PROJ" "$json"
-after=$(grep -c "^${TODAY}|" "$HEALTH_FILE" 2>/dev/null || echo 0)
+# count_today_rows — grep -c both prints "0" AND exits non-zero on a no-match
+# file (the "0\n0" double-output gotcha documented in session-end-dispatch.sh);
+# guard with grep -q first, and treat a missing file as 0.
+count_today_rows() {
+  if [ -f "$HEALTH_FILE" ] && grep -q "^${TODAY}|" "$HEALTH_FILE" 2>/dev/null; then
+    grep -c "^${TODAY}|" "$HEALTH_FILE" 2>/dev/null
+  else
+    echo 0
+  fi
+}
+
+before=$(count_today_rows)
+run_native "session-end-dispatch" "$PROJ" "$json"
+mid=$(count_today_rows)
+run_stale "session-end-dispatch" "$PROJ" "$json"
+after=$(count_today_rows)
 
 assert_pair_contract "session_end"
-assert_net_delta "session_end_pair_exactly_one_health_row" "1" "$before" "$after"
+assert_net_delta "session_end_native_contributes_the_health_row" "1" "$before" "$mid"
+assert_net_delta "session_end_stale_contributes_nothing" "0" "$mid" "$after"
+assert_eq "session_end_stale_suppressed_returns_empty" "{}" "$OUT_STALE"
 
 # ============================================================================
 # 6. pre-compact.sh — discriminator: carry_over event appended by the
@@ -190,11 +237,15 @@ echo "[carry-over] Finish the dual-fire harness" > "$TRANSCRIPT"
 json=$(mock_json "session_id=$SID" "transcript_path=$TRANSCRIPT")
 
 before=$(count_events carry_over '' '' "$LOG")
-run_pair "pre-compact" "$PROJ" "$json"
+run_native "pre-compact" "$PROJ" "$json"
+mid=$(count_events carry_over '' '' "$LOG")
+run_stale "pre-compact" "$PROJ" "$json"
 after=$(count_events carry_over '' '' "$LOG")
 
 assert_pair_contract "pre_compact"
-assert_net_delta "pre_compact_pair_exactly_one_carry_over_event" "1" "$before" "$after"
+assert_net_delta "pre_compact_native_contributes_the_carry_over_event" "1" "$before" "$mid"
+assert_net_delta "pre_compact_stale_contributes_nothing" "0" "$mid" "$after"
+assert_eq "pre_compact_stale_suppressed_returns_empty" "{}" "$OUT_STALE"
 
 export PATH="$SAVED_PATH"
 end_suite
