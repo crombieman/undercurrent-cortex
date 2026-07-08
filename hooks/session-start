@@ -126,10 +126,13 @@ if type validate_organism &>/dev/null; then
   fi
 fi
 
-# --- Step 0c: Bootstrap PreToolUse/PostToolUse command hooks ---
-# WORKAROUND: Plugin hooks.json command hooks silently dropped for PreToolUse/PostToolUse
-# See: https://github.com/anthropics/claude-code/issues/34573
-# Remove this when the bug is fixed.
+# --- Step 0c: Cleanup leftover bootstrap-injected settings.json entries ---
+# CLEANUP ONLY (Task 6): bootstrap-hooks.sh no longer injects anything — all
+# 7 events are natively registered in hooks.json (Task 5's --native marker
+# protocol makes any leftover settings.json entries structurally inert). This
+# call just removes leftovers from old plugin versions as best-effort
+# hygiene. See: https://github.com/anthropics/claude-code/issues/34573
+# DELETE THIS CALL (and the script) in v4.2 per spec §4.4.
 PLUGIN_ROOT="$PLUGIN_ROOT" "$SCRIPT_DIR/scripts/bootstrap-hooks.sh" 2>/dev/null || true
 
 # --- Step 1: Derive carry-over from prior sessions ---
