@@ -127,6 +127,18 @@ create_event_log "$_TEST_TMPDIR/.claude" "carry-addressed" \
 result=$(run_stop_gate "carry-addressed")
 assert_eq "carry_over_addressed_by_hash_skips_gate4" "{}" "$result"
 
+# Test: re-raising an addressed item (carry epoch AFTER the addressed epoch)
+# resurrects it — Gate 4 re-blocks (spec §3.5 epoch-ordering amendment).
+setup_test
+item_text="Fix the broken pipeline"
+item_hash=$(eio_item_hash "$item_text")
+create_event_log "$_TEST_TMPDIR/.claude" "carry-reraise" \
+  "1700000001|carry_over|${item_text}" \
+  "1700000002|carry_addressed|${item_hash}" \
+  "1700000003|carry_over|${item_text}" > /dev/null
+result=$(run_stop_gate "carry-reraise")
+assert_contains "reraised_carry_over_reblocks_gate4" "$result" "Carry-over"
+
 # --- Gate 5: stale carry-over ---
 
 # Test: block when carry_over_age >= 3 (session-start-written, stop-gate only reads it)

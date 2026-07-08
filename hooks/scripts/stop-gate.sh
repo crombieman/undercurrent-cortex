@@ -95,23 +95,13 @@ if [ "$file_count" -gt 3 ]; then
   fi
 fi
 
-# Gate 4: Carry-over items not addressed — an item counts as addressed once
-# its content hash appears among carry_addressed events.
-carry_items=$(list_events carry_over)
-if [ -n "$carry_items" ]; then
-  addressed_hashes=$(list_events carry_addressed)
-  unaddressed=false
-  while IFS= read -r item; do
-    [ -z "$item" ] && continue
-    item_hash=$(eio_item_hash "$item")
-    if ! printf '%s\n' "$addressed_hashes" | grep -qxF "$item_hash"; then
-      unaddressed=true
-      break
-    fi
-  done <<< "$carry_items"
-  if [ "$unaddressed" = true ]; then
-    add_failure "carry_over" "Carry-over items from prior session not addressed"
-  fi
+# Gate 4: Carry-over items not addressed. Epoch-ordered reconciliation (spec §3.5
+# amendment) via the shared eio_unresolved_items helper — the single source of
+# truth shared with pre-compact and session-start. An item is unresolved iff its
+# latest carry_over epoch strictly exceeds its latest carry_addressed epoch
+# (re-raising identical text after addressing resurrects it).
+if [ -n "$(eio_unresolved_items "$EVENT_LOG")" ]; then
+  add_failure "carry_over" "Carry-over items from prior session not addressed"
 fi
 
 # Gate 5: Stale carry-over (3+ sessions unresolved) — written once by

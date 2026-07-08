@@ -149,6 +149,50 @@ assert_eq "item_hash_numeric" "yes" "$is_num"
 # --- normalize_path (copied verbatim from state-io.sh, wave 2 task 2) ---
 assert_eq "normalize_backslash_drive" "C:/Users/x" "$(normalize_path 'c:\Users\x')"
 
+# --- eio_unresolved_items: epoch-ordered carry-over reconciliation (spec §3.5) ---
+# Semantics: an item is UNRESOLVED iff the epoch of its latest carry_over event is
+# STRICTLY GREATER than the epoch of the latest carry_addressed event for its hash.
+# No addressed event => unresolved. Equal epochs => resolved (addressed wins ties).
+TDIRU=$(mktemp -d)
+
+# (a) carried then addressed later => resolved (absent)
+uw="Fix the widget"
+la=$(create_event_log "$TDIRU/.claude" "u-a" \
+  "1700000100|carry_over|$uw" \
+  "1700000200|carry_addressed|$(eio_item_hash "$uw")")
+assert_eq "unresolved_carried_then_addressed_absent" "" "$(eio_unresolved_items "$la")"
+
+# (b) addressed then RE-RAISED later => unresolved (present)
+lb=$(create_event_log "$TDIRU/.claude" "u-b" \
+  "1700000100|carry_over|$uw" \
+  "1700000200|carry_addressed|$(eio_item_hash "$uw")" \
+  "1700000300|carry_over|$uw")
+assert_eq "unresolved_reraised_present" "$uw" "$(eio_unresolved_items "$lb")"
+
+# (c) equal epochs => resolved (addressed wins ties, absent)
+lc=$(create_event_log "$TDIRU/.claude" "u-c" \
+  "1700000100|carry_over|$uw" \
+  "1700000100|carry_addressed|$(eio_item_hash "$uw")")
+assert_eq "unresolved_equal_epoch_absent" "" "$(eio_unresolved_items "$lc")"
+
+# (d) cross-file: carried log1, addressed later log2 => absent;
+#     re-raised even later log3 => present. Epochs compare GLOBALLY.
+xw="Cross file item"
+ld1=$(create_event_log "$TDIRU/.claude" "u-d1" "1700000100|carry_over|$xw")
+ld2=$(create_event_log "$TDIRU/.claude" "u-d2" "1700000200|carry_addressed|$(eio_item_hash "$xw")")
+assert_eq "unresolved_crossfile_addressed_absent" "" "$(eio_unresolved_items "$ld1" "$ld2")"
+ld3=$(create_event_log "$TDIRU/.claude" "u-d3" "1700000300|carry_over|$xw")
+assert_eq "unresolved_crossfile_reraised_present" "$xw" "$(eio_unresolved_items "$ld1" "$ld2" "$ld3")"
+
+# (e) never addressed => unresolved (present)
+le=$(create_event_log "$TDIRU/.claude" "u-e" "1700000100|carry_over|Never addressed item")
+assert_eq "unresolved_never_addressed_present" "Never addressed item" "$(eio_unresolved_items "$le")"
+
+# (f) dedup: same text carried in two logs => one output line
+lf1=$(create_event_log "$TDIRU/.claude" "u-f1" "1700000100|carry_over|Dup item")
+lf2=$(create_event_log "$TDIRU/.claude" "u-f2" "1700000200|carry_over|Dup item")
+assert_eq "unresolved_dedup_single_line" "Dup item" "$(eio_unresolved_items "$lf1" "$lf2")"
+
 # --- resolve_event_log: malformed JSON must not crash under errexit ---
 # jq/python3 reject the input; the extraction substitutions must swallow the
 # parser failure (hooks contract: always exit 0). Run in a fresh errexit shell

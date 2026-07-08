@@ -139,6 +139,23 @@ NEW_LOG="$(_eio_week_dir)/${sid}.events.log"
 new_items=$(list_events carry_over "$NEW_LOG")
 assert_not_contains "cross_log_addressed_suppressed" "$new_items" "Cross log handling qqq"
 
+# --- Test 7b: a re-raised item (carry epoch AFTER the addressed epoch) resurfaces ---
+# Proves epoch ordering (spec §3.5 amendment): addressing does NOT permanently
+# suppress an item — re-raising identical text later resurrects it.
+setup_test
+sid="ss-reraise"
+ritem="- Reraised handling ccc"
+rhash=$(eio_item_hash "$ritem")
+create_event_log "$_TEST_TMPDIR/.claude" "prior-reraise" \
+  "1700000100|carry_over|$ritem" \
+  "1700000200|carry_addressed|$rhash" \
+  "1700000300|carry_over|$ritem" > /dev/null
+result=$(run_session_start "$(mock_json "session_id=$sid")")
+NEW_LOG="$(_eio_week_dir)/${sid}.events.log"
+new_items=$(list_events carry_over "$NEW_LOG")
+assert_contains "reraised_item_resurfaces_in_new_log" "$new_items" "Reraised handling ccc"
+assert_contains "reraised_item_surfaced_in_output" "$result" "Reraised handling ccc"
+
 # --- Test 8: legacy *.local.md carry-over is still read + re-surfaced ---
 setup_test
 sid="ss-legacy"

@@ -176,6 +176,83 @@ eio_item_hash() {
   printf '%s' "$text" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | cksum | awk '{print $1}'
 }
 
+# eio_unresolved_items <file> [file...]
+# Echoes UNRESOLVED carry-over item texts, one per line, deduped (each item text
+# appears once even if carried in multiple logs), in first-seen order across the
+# given files. Single source of truth for carry-over reconciliation (stop-gate
+# Gate 4, pre-compact, session-start cross-log scan).
+#
+# Semantics (spec §3.5 amendment — epoch ordering): an item is UNRESOLVED iff the
+# epoch (field 1) of its LATEST carry_over event is STRICTLY GREATER than the epoch
+# of the latest carry_addressed event whose value equals the item's eio_item_hash.
+# No matching carry_addressed => unresolved. Equal epochs => RESOLVED (addressed
+# wins ties). Re-raising identical text after addressing resurrects the item.
+# Multi-file: epochs compare GLOBALLY (latest carry anywhere vs latest addressed
+# anywhere).
+eio_unresolved_items() {
+  local -a files=()
+  local f
+  for f in "$@"; do
+    [ -n "$f" ] && [ -f "$f" ] && files+=("$f")
+  done
+  [ "${#files[@]}" -gt 0 ] || return 0
+
+  # One awk pass over all files → a merged, tab-delimited stream:
+  #   epoch<TAB>C<TAB>value   for carry_over lines
+  #   epoch<TAB>A<TAB>value   for carry_addressed lines  (value = the item hash)
+  # CRLF-stripped, malformed lines skipped via the same line-format guard as the
+  # other readers. Epochs are global, so no per-file separation is needed.
+  local stream
+  stream=$(awk '
+    { sub(/\r$/, "") }
+    !/^[0-9]+\|[a-z_]+\|/ { next }
+    {
+      ep = substr($0, 1, index($0, "|") - 1)
+      rest = substr($0, index($0, "|") + 1)
+      t = substr(rest, 1, index(rest, "|") - 1)
+      v = substr(rest, index(rest, "|") + 1)
+      if (t == "carry_over")            print ep "\tC\t" v
+      else if (t == "carry_addressed")  print ep "\tA\t" v
+    }
+  ' "${files[@]}")
+
+  # Fold the stream: per-hash latest carry epoch, latest addressed epoch, and the
+  # first-seen carry text. Item counts are tens — linear lookups are ample.
+  local -A carry_ep=() addr_ep=() text_of=()
+  local -a order=()
+  local ep flag val h
+  while IFS=$'\t' read -r ep flag val; do
+    [ -n "$ep" ] || continue
+    if [ "$flag" = "C" ]; then
+      h=$(eio_item_hash "$val")
+      if [ -z "${text_of[$h]+set}" ]; then
+        text_of[$h]="$val"
+        order+=("$h")
+      fi
+      if [ -z "${carry_ep[$h]+set}" ] || [ "$ep" -gt "${carry_ep[$h]}" ]; then
+        carry_ep[$h]="$ep"
+      fi
+    elif [ "$flag" = "A" ]; then
+      # carry_addressed value IS the item hash (see append sites).
+      h="$val"
+      if [ -z "${addr_ep[$h]+set}" ] || [ "$ep" -gt "${addr_ep[$h]}" ]; then
+        addr_ep[$h]="$ep"
+      fi
+    fi
+  done <<< "$stream"
+
+  # Emit items whose latest carry epoch strictly exceeds their latest addressed
+  # epoch (or that were never addressed), in first-seen order.
+  local ce ae
+  for h in "${order[@]}"; do
+    ce="${carry_ep[$h]}"
+    ae="${addr_ep[$h]:-}"
+    if [ -z "$ae" ] || [ "$ce" -gt "$ae" ]; then
+      printf '%s\n' "${text_of[$h]}"
+    fi
+  done
+}
+
 # normalize_path "path"
 # Normalizes a file path: backslash → forward slash, lowercase drive → uppercase.
 # Used to prevent duplicate tracking of the same file with different path formats.

@@ -108,16 +108,16 @@ for sf in "${SESSIONS_DIR}"/*/*.local.md "${STATE_DIR}"/cortex-state-*.local.md;
   fi
 done
 
-# (b) Event logs: build the UNION of all carry_over items and all
-# carry_addressed hashes across prior logs FIRST (hashes are content-based, so
-# an item addressed in a DIFFERENT log still reconciles), then keep only items
-# whose hash is unaddressed. 30-day recency filter is by file mtime.
-# Per-log (items, age) are stashed so the age max can be computed AFTER the
-# addressed union is known — a log's age only counts if one of ITS items survives
-# reconciliation (else a fully-addressed stale log would bleed its age onto fresh
-# items and false-block stop-gate Gate 5).
-event_all_items=""
-event_all_addressed=""
+# (b) Event logs: collect the 30-day-recent prior logs (mtime filter; skip the
+# log we just created), then let the shared eio_unresolved_items helper compute
+# the epoch-ordered unresolved set GLOBALLY across all of them (spec §3.5
+# amendment: latest carry_over epoch anywhere vs latest carry_addressed epoch
+# anywhere — an item addressed in a DIFFERENT log still reconciles, and one
+# re-raised after addressing resurfaces). Per-log (items, age) are stashed so the
+# age max can be computed AFTER the global unresolved set is known — a log's age
+# only counts if at least one of ITS items is in that set (else a fully-addressed
+# stale log would bleed its age onto fresh items and false-block stop-gate Gate 5).
+declare -a _scanned_logs=()
 declare -a _elog_items=()
 declare -a _elog_age=()
 cutoff_epoch=$(date -d "30 days ago" +%s 2>/dev/null || date -v-30d +%s 2>/dev/null || echo "0")
@@ -130,30 +130,27 @@ for f in "$(_eio_sessions_dir)"/*/*.events.log; do
       continue
     fi
   fi
-  items=$(list_events carry_over "$f")
-  [ -n "$items" ] && event_all_items="${event_all_items}${items}"$'\n'
-  addressed=$(list_events carry_addressed "$f")
-  [ -n "$addressed" ] && event_all_addressed="${event_all_addressed}${addressed}"$'\n'
+  _scanned_logs+=("$f")
+  _elog_items+=("$(list_events carry_over "$f")")
   age=$(last_event carry_over_age "$f")
   age="${age:-0}"
   case "$age" in *[!0-9]*) age=0 ;; esac
-  _elog_items+=("$items")
   _elog_age+=("$age")
 done
 
-# Set-difference: event items whose content hash is not in the addressed union.
-if [ -n "$event_all_items" ]; then
-  while IFS= read -r ev_item; do
-    [ -z "$ev_item" ] && continue
-    ev_hash=$(eio_item_hash "$ev_item")
-    if ! printf '%s\n' "$event_all_addressed" | grep -qxF "$ev_hash"; then
-      old_carry_over="${old_carry_over}${ev_item}"$'\n'
-    fi
-  done <<< "$event_all_items"
+# Global epoch-ordered unresolved set across all scanned prior logs.
+event_unresolved=""
+if [ "${#_scanned_logs[@]}" -gt 0 ]; then
+  event_unresolved=$(eio_unresolved_items "${_scanned_logs[@]}")
+fi
+if [ -n "$event_unresolved" ]; then
+  old_carry_over="${old_carry_over}${event_unresolved}"$'\n'
 fi
 
 # Age max, second pass: include a log's age ONLY if at least one of its own
-# carry_over items survives reconciliation (hash not in the addressed union).
+# carry_over items is in the global unresolved set (per-log survival against the
+# global reconciliation — items flow verbatim, so text membership == hash
+# membership here).
 event_carry_age="0"
 _elog_n=${#_elog_age[@]}
 _elog_i=0
@@ -161,11 +158,10 @@ while [ "$_elog_i" -lt "$_elog_n" ]; do
   _li="${_elog_items[$_elog_i]}"
   _la="${_elog_age[$_elog_i]}"
   _survives=0
-  if [ -n "$_li" ]; then
+  if [ -n "$_li" ] && [ -n "$event_unresolved" ]; then
     while IFS= read -r _it; do
       [ -z "$_it" ] && continue
-      _ih=$(eio_item_hash "$_it")
-      if ! printf '%s\n' "$event_all_addressed" | grep -qxF "$_ih"; then
+      if printf '%s\n' "$event_unresolved" | grep -qxF "$_it"; then
         _survives=1
         break
       fi

@@ -44,25 +44,12 @@ fi
 # --- Build preservation summary from the event log ---
 summary="[PRE-COMPACT CONTEXT PRESERVATION]"
 
-# Carry-over items (read AFTER transcript scan writes — I3).
-# "Addressed" shares stop-gate.sh Gate 4's semantics exactly: an item counts
-# as addressed once its content hash appears among carry_addressed events.
-# Only UNADDRESSED items are preserved and warned about, so both scripts
-# present the same view once carry_addressed emitters land in a later wave
-# (until then, no carry_addressed events exist and every item is unresolved —
-# identical to v3's always-warn effective behavior).
-carry_over=""
-carry_items=$(list_events carry_over)
-if [ -n "$carry_items" ]; then
-  addressed_hashes=$(list_events carry_addressed)
-  while IFS= read -r item; do
-    [ -z "$item" ] && continue
-    item_hash=$(eio_item_hash "$item")
-    if ! printf '%s\n' "$addressed_hashes" | grep -qxF "$item_hash"; then
-      carry_over="${carry_over}${carry_over:+$'\n'}${item}"
-    fi
-  done <<< "$carry_items"
-fi
+# Carry-over items (read AFTER transcript scan writes — I3). Epoch-ordered
+# reconciliation (spec §3.5 amendment) via the shared eio_unresolved_items
+# helper — the same source of truth as stop-gate.sh Gate 4. Only UNRESOLVED
+# items (latest carry_over epoch strictly after their latest carry_addressed
+# epoch) are preserved and warned about, so both scripts present the same view.
+carry_over=$(eio_unresolved_items "$EVENT_LOG")
 if [ -n "$carry_over" ]; then
   summary="${summary}"$'\n\n'"Carry-over items:"$'\n'"${carry_over}"
 fi
@@ -92,7 +79,7 @@ if [ "${edits:-0}" -gt 0 ]; then
   summary="${summary}"$'\n'"WARNING: ${edits} uncommitted edits at compaction time."
 fi
 
-# carry_over holds only UNADDRESSED items (hash-reconciled above) — warn
+# carry_over holds only UNRESOLVED items (epoch-reconciled above) — warn
 # whenever any remain, mirroring stop-gate.sh Gate 4's block condition.
 if [ -n "$carry_over" ]; then
   summary="${summary}"$'\n'"WARNING: Carry-over items not yet addressed."
