@@ -31,7 +31,6 @@ fi
 
 CORTEX_DIR="${PROJECT_DIR}/.claude/cortex"
 HEALTH_FILE="${CORTEX_DIR}/health.local.md"
-PROPOSALS_FILE="${CORTEX_DIR}/proposals.local.md"
 
 # --- Compute metrics ---
 today=$(date +%Y-%m-%d)
@@ -268,15 +267,10 @@ if [ "$line_count" -ge 1 ]; then
   ' "$HEALTH_FILE" > "$HEALTH_FILE.tmp.$$" && mv "$HEALTH_FILE.tmp.$$" "$HEALTH_FILE"
 fi
 
-# --- Proposal count warning ---
-if [ -f "$PROPOSALS_FILE" ]; then
-  if grep -q '^id=' "$PROPOSALS_FILE" 2>/dev/null; then
-    proposal_count=$(grep -c '^id=' "$PROPOSALS_FILE" 2>/dev/null)
-    if [ "${proposal_count:-0}" -gt 50 ]; then
-      append_event "proposals_need_archiving" "true"
-    fi
-  fi
-fi
+# v3's proposal-count warning (>50 ids => proposals_need_archiving flag) was
+# dropped here: the flag was write-only-dead (never read anywhere), and
+# proposals_need_archiving is not in the closed v4 event vocabulary (spec §3.3).
+# The proposal-pruning concept moves to wave 4's pruning work.
 
 printf '{}'
 exit 0

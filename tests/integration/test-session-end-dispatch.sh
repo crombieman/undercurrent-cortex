@@ -258,4 +258,21 @@ data_line=$(grep "^${TODAY}" "$health_file" | head -1)
 lessons_created=$(echo "$data_line" | cut -d'|' -f6)
 assert_eq "lessons_created_counted_via_git_diff" "3" "$lessons_created"
 
+# --- Test 15: proposals_need_archiving is NOT in the closed v4 event
+# vocabulary (spec §3.3) — even with >50 proposal ids, the v3 write-only-dead
+# flag must not be emitted as an event. Guards against reintroduction. ---
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "se-noarch" \
+  "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/a.ts")
+make_journal "$_TEST_TMPDIR"
+mkdir -p "$_TEST_TMPDIR/.claude/cortex"
+proposals_file="$_TEST_TMPDIR/.claude/cortex/proposals.local.md"
+> "$proposals_file"
+for i in $(seq 1 51); do
+  printf 'id=20260101-p%s\nstatus=pending\n---\n' "$i" >> "$proposals_file"
+done
+run_session_end "se-noarch" > /dev/null
+arch_events=$(count_events proposals_need_archiving '' '' "$LOG")
+assert_eq "no_proposals_need_archiving_event" "0" "$arch_events"
+
 end_suite
