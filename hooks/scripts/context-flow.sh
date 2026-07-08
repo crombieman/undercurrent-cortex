@@ -30,14 +30,23 @@ INPUT=$(cat)
 # /cortex:setup or session-start's grandfathering check.
 [ -f "$(_eio_cortex_dir)/enabled" ] || { printf '{}'; exit 0; }
 
-# Native dual-fire suppression (spec §4.2): invoked WITHOUT --native while the
-# native-hooks.ok marker is present means this is the stale settings.json
-# bootstrap entry firing alongside the native hooks.json registration —
-# suppress it so the event doesn't get appended twice. No marker present means
-# a pre-4.0 install (compat window): proceed normally.
-if [ "$NATIVE" != true ] && [ -f "$(_eio_cortex_dir)/native-hooks.ok" ]; then
-  printf '{}'
-  exit 0
+# Native dual-fire suppression (spec §4.2, hardened Codex I-2): suppress ONLY
+# when the native-hooks.ok marker's 3rd token (session_id, written by
+# session-start THIS session) equals THIS payload's session_id — proof native
+# registration is demonstrably alive for this very session. A marker with a
+# mismatched or missing 3rd token (downgrade, legacy 2-token marker), or a
+# payload carrying no session_id, does NOT suppress (compat: proceed normally).
+# Presence alone is insufficient — it can outlive an active native registration.
+if [ "$NATIVE" != true ]; then
+  _marker="$(_eio_cortex_dir)/native-hooks.ok"
+  if [ -f "$_marker" ]; then
+    _marker_sid=$(awk 'NR==1{print $3}' "$_marker" 2>/dev/null | tr -d '[:space:]' || true)
+    _payload_sid=$(_eio_extract_sid "$INPUT")
+    if [ -n "$_payload_sid" ] && [ "$_marker_sid" = "$_payload_sid" ]; then
+      printf '{}'
+      exit 0
+    fi
+  fi
 fi
 
 resolve_event_log "$INPUT"

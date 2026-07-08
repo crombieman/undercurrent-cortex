@@ -47,13 +47,16 @@ export PATH="$MOCK_BIN:$PATH"
 create_mock_git "$MOCK_BIN" "clean"
 create_mock_gh "$MOCK_BIN" "success"
 
-# stamp_native_marker <claude_dir> — same contract as
-# tests/integration/test-native-marker.sh's helper (content format doesn't
-# matter to the dispatchers, only existence).
+# stamp_native_marker <claude_dir> <session_id> — same contract as
+# tests/integration/test-native-marker.sh's helper. The session_id 3rd token is
+# now load-bearing (Codex I-2): the STALE (non-native) invocation suppresses
+# ONLY when the marker's sid matches its payload's sid, so every dual-fire block
+# stamps the SAME sid its payload carries — reproducing the real first-4.0-
+# session overlap where session-start wrote the marker for THIS session.
 stamp_native_marker() {
-  local claude_dir="$1"
+  local claude_dir="$1" sid="${2:-}"
   mkdir -p "$claude_dir/cortex"
-  printf '3.18.1 2026-07-08T00:00:00Z\n' > "$claude_dir/cortex/native-hooks.ok"
+  printf '3.18.1 2026-07-08T00:00:00Z %s\n' "$sid" > "$claude_dir/cortex/native-hooks.ok"
 }
 
 # run_native / run_stale <script> <proj> <json>
@@ -106,7 +109,7 @@ setup_test
 PROJ="$_TEST_TMPDIR/proj-pre"
 SID="df-pre"
 LOG=$(create_event_log "$PROJ/.claude" "$SID")
-stamp_native_marker "$PROJ/.claude"
+stamp_native_marker "$PROJ/.claude" "$SID"
 json=$(mock_json "tool_name=ExitPlanMode" "session_id=$SID")
 
 before=$(count_events plan_mode '' '' "$LOG")
@@ -127,7 +130,7 @@ setup_test
 PROJ="$_TEST_TMPDIR/proj-post"
 SID="df-post"
 LOG=$(create_event_log "$PROJ/.claude" "$SID")
-stamp_native_marker "$PROJ/.claude"
+stamp_native_marker "$PROJ/.claude" "$SID"
 json=$(mock_json "tool_name=Bash" "session_id=$SID" "tool_input.command=echo hi")
 
 before=$(count_events tool_call '' '' "$LOG")
@@ -153,7 +156,7 @@ setup_test
 PROJ="$_TEST_TMPDIR/proj-ctx"
 SID="df-ctx"
 create_event_log "$PROJ/.claude" "$SID" > /dev/null
-stamp_native_marker "$PROJ/.claude"
+stamp_native_marker "$PROJ/.claude" "$SID"
 json=$(mock_json "user_prompt=[decision] use Postgres for this" "session_id=$SID")
 
 run_native "context-flow" "$PROJ" "$json"
@@ -172,7 +175,7 @@ setup_test
 PROJ="$_TEST_TMPDIR/proj-stop"
 SID="df-stop"
 LOG=$(create_event_log "$PROJ/.claude" "$SID")
-stamp_native_marker "$PROJ/.claude"
+stamp_native_marker "$PROJ/.claude" "$SID"
 json=$(mock_json "session_id=$SID")
 
 before=$(( $(count_events stop_approved '' '' "$LOG") + $(count_events stop_blocked '' '' "$LOG") ))
@@ -196,7 +199,7 @@ setup_test
 PROJ="$_TEST_TMPDIR/proj-end"
 SID="df-end"
 create_event_log "$PROJ/.claude" "$SID" > /dev/null
-stamp_native_marker "$PROJ/.claude"
+stamp_native_marker "$PROJ/.claude" "$SID"
 json=$(mock_json "session_id=$SID")
 HEALTH_FILE="$PROJ/.claude/cortex/health.local.md"
 TODAY=$(date +%Y-%m-%d)
@@ -231,7 +234,7 @@ setup_test
 PROJ="$_TEST_TMPDIR/proj-compact"
 SID="df-compact"
 LOG=$(create_event_log "$PROJ/.claude" "$SID")
-stamp_native_marker "$PROJ/.claude"
+stamp_native_marker "$PROJ/.claude" "$SID"
 TRANSCRIPT="$_TEST_TMPDIR/transcript-compact.txt"
 echo "[carry-over] Finish the dual-fire harness" > "$TRANSCRIPT"
 json=$(mock_json "session_id=$SID" "transcript_path=$TRANSCRIPT")

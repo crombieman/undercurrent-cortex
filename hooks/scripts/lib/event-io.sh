@@ -18,38 +18,48 @@ _eio_week_dir() {
   echo "$(_eio_sessions_dir)/$(date +%G-W%V 2>/dev/null || echo unknown)"
 }
 
+# _eio_extract_sid "<hook_stdin_json>"
+# Echoes the session_id from the hook JSON (empty string if absent/malformed).
+# 3-tier jq -> python3 -> POSIX-awk fallback (the awk tier must stand alone —
+# Codex I-3). Factored out of resolve_event_log so the native-marker
+# suppression check (spec I-2) can prove same-session liveness without
+# re-resolving the whole event log.
+_eio_extract_sid() {
+  local json="${1:-}" sid=""
+  [ -n "$json" ] || { echo ""; return 0; }
+  # || true inside each substitution: jq/python3 exit non-zero on malformed
+  # JSON, and under the callers' set -euo pipefail a failing assignment kills
+  # the whole hook (contract violation: hooks always exit 0 with JSON).
+  if command -v jq >/dev/null 2>&1; then
+    sid=$(printf '%s' "$json" | jq -r '.session_id // empty' 2>/dev/null || true)
+  fi
+  if [ -z "$sid" ] && command -v python3 >/dev/null 2>&1; then
+    sid=$(printf '%s' "$json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null || true)
+  fi
+  if [ -z "$sid" ]; then
+    # POSIX-awk match() + first-line-first-match: tolerates pretty-printed
+    # JSON (spaces/newlines around ":") and prefers the FIRST occurrence of
+    # a duplicated key. No jq/python3 dependency.
+    sid=$(printf '%s' "$json" | awk '
+      match($0, /"session_id"[[:space:]]*:[[:space:]]*"[^"]*"/) {
+        s = substr($0, RSTART, RLENGTH)
+        sub(/^"session_id"[[:space:]]*:[[:space:]]*"/, "", s)
+        sub(/"$/, "", s)
+        print s
+        exit
+      }
+    ' 2>/dev/null) || true
+  fi
+  echo "$sid"
+}
+
 # resolve_event_log "<hook_stdin_json>"
 # Sets EVENT_LOG from session_id in the JSON. Empty session_id => EVENT_LOG=""
 # (appends require an attributable session; spec §3.4). Never creates directories.
 resolve_event_log() {
   local json="${1:-}" sid=""
   EVENT_LOG=""
-  if [ -n "$json" ]; then
-    # || true inside each substitution: jq/python3 exit non-zero on malformed
-    # JSON, and under the callers' set -euo pipefail a failing assignment kills
-    # the whole hook (contract violation: hooks always exit 0 with JSON).
-    if command -v jq >/dev/null 2>&1; then
-      sid=$(printf '%s' "$json" | jq -r '.session_id // empty' 2>/dev/null || true)
-    fi
-    if [ -z "$sid" ] && command -v python3 >/dev/null 2>&1; then
-      sid=$(printf '%s' "$json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null || true)
-    fi
-    if [ -z "$sid" ]; then
-      # POSIX-awk match() + first-line-first-match: tolerates pretty-printed
-      # JSON (spaces/newlines around ":") and prefers the FIRST occurrence of
-      # a duplicated key. No jq/python3 dependency — this tier must stand
-      # alone (Codex I-3).
-      sid=$(printf '%s' "$json" | awk '
-        match($0, /"session_id"[[:space:]]*:[[:space:]]*"[^"]*"/) {
-          s = substr($0, RSTART, RLENGTH)
-          sub(/^"session_id"[[:space:]]*:[[:space:]]*"/, "", s)
-          sub(/"$/, "", s)
-          print s
-          exit
-        }
-      ' 2>/dev/null) || true
-    fi
-  fi
+  sid=$(_eio_extract_sid "$json")
   [ -z "$sid" ] && return 0
 
   local candidate="$(_eio_week_dir)/${sid}.events.log"

@@ -34,19 +34,6 @@ if [ ! -f "$(_eio_cortex_dir)/enabled" ]; then
 fi
 [ -f "$(_eio_cortex_dir)/enabled" ] || { printf '{}'; exit 0; }
 
-# --- Native hooks marker (Task 5, spec §4.2) ---
-# session-start is native by definition — it has always run from hooks.json,
-# never bootstrapped into settings.json — so writing this marker here (once
-# the opt-in gate passes) is the single signal the other 6 dispatchers use to
-# detect that hooks.json now handles their event too this session, and
-# suppress the stale settings.json bootstrap entry (avoids double-firing /
-# duplicate event appends). Single writer, overwritten every session
-# (sanctioned) — no read-modify-write race with the dispatchers, which only
-# ever check existence.
-_native_version=$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "${PLUGIN_ROOT}/.claude-plugin/plugin.json" 2>/dev/null | head -1) || true
-mkdir -p "$(_eio_cortex_dir)" 2>/dev/null || true
-printf '%s %s\n' "${_native_version:-unknown}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$(_eio_cortex_dir)/native-hooks.ok" 2>/dev/null || true
-
 # session-start is the SINGLE sanctioned exception still allowed to source
 # state-io.sh (legacy carry-over reader + cleanup_stale_state_files /
 # validate_organism, until Task 4.2 slims it). event-io.sh (sourced above) is
@@ -87,6 +74,24 @@ fi
 # Fallback: epoch + PID if no session_id from Claude Code. The `-$$` suffix makes
 # concurrent boots in the same second collision-resistant (distinct log files).
 [ -z "$HOOK_SESSION_ID" ] && HOOK_SESSION_ID="$(date +%s)-$$"
+
+# --- Native hooks marker (Task 5, spec §4.2; hardened Codex I-2) ---
+# session-start is native by definition — it has always run from hooks.json,
+# never bootstrapped into settings.json — so writing this marker here (once the
+# opt-in gate passes) is the single signal the other 6 dispatchers use to
+# detect that hooks.json now handles their event too this session, and suppress
+# the stale settings.json bootstrap entry (avoids double-firing / duplicate
+# event appends). Content is "<plugin_version> <utc-iso> <session_id>": the
+# THIRD token is written here (not just presence) so a dispatcher suppresses
+# ONLY when the marker's sid matches ITS payload's sid — proof native
+# registration ran for THIS very session (presence alone can survive a
+# downgrade/edge state and wrongly suppress). Written after HOOK_SESSION_ID is
+# finalized (needs the sid). Single writer, overwritten every session
+# (sanctioned) — no read-modify-write race with the dispatchers, which only
+# ever read it.
+_native_version=$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "${PLUGIN_ROOT}/.claude-plugin/plugin.json" 2>/dev/null | head -1) || true
+mkdir -p "$(_eio_cortex_dir)" 2>/dev/null || true
+printf '%s %s %s\n' "${_native_version:-unknown}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$HOOK_SESSION_ID" > "$(_eio_cortex_dir)/native-hooks.ok" 2>/dev/null || true
 
 # --- Create the per-session event log (the ONLY place it is created) ---
 # Line format: epoch|session_start|<iso8601-utc> <model_name>. The first value
