@@ -85,6 +85,10 @@ unset -f jq python3
 ORIGINAL_PATH="$PATH"
 mock_bin=$(setup_mock_path "$_TEST_TMPDIR")
 hide_command "$mock_bin" "jq"
+# Remove any stale python3 stub left in this shared mock dir by earlier masked
+# blocks — with it on PATH, `command -v python3` resolves the 127-stub and
+# these "tier-2" tests silently exercise tier 3 instead (review finding).
+rm -f "$mock_bin/python3"
 PATH="$mock_bin:$PATH"
 
 if command -v python3 >/dev/null 2>&1; then

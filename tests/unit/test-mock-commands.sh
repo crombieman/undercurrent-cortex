@@ -75,7 +75,12 @@ if [ "$self_referential" = "yes" ]; then
   skip_test "second_mock_date_j_format_returns_latest_value" "static self-reference check already failed — skipping dynamic exec"
 else
   set +e
-  result=$(timeout -s KILL 3 "$mock_bin2/date" +%s 2>/dev/null)
+  # ulimit -u caps the subshell's process count so ANY regression form that
+  # slips past the static self-reference grep (novel path shapes, symlinks)
+  # dies at the cap in milliseconds on every platform — `timeout` alone only
+  # signals the direct child and cannot contain a re-parenting fork chain
+  # (review finding after the contained forkbomb incident).
+  result=$( (ulimit -u 64 2>/dev/null; timeout -s KILL 3 "$mock_bin2/date" +%s) 2>/dev/null)
   rc=$?
   set -e
   assert_eq "second_mock_date_creation_does_not_hang" "0" "$rc"
@@ -86,7 +91,7 @@ else
   # The mocked +%j format still returns the LATEST creation's value — proves
   # the regenerated script is the 2nd mock's own logic, not a stale copy.
   set +e
-  result_j=$(timeout -s KILL 3 "$mock_bin2/date" +%j 2>/dev/null)
+  result_j=$( (ulimit -u 64 2>/dev/null; timeout -s KILL 3 "$mock_bin2/date" +%j) 2>/dev/null)
   rc_j=$?
   set -e
   assert_eq "second_mock_date_j_format_no_hang" "0" "$rc_j"
