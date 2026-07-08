@@ -44,8 +44,25 @@ fi
 # --- Build preservation summary from the event log ---
 summary="[PRE-COMPACT CONTEXT PRESERVATION]"
 
-# Carry-over items (read AFTER transcript scan writes — I3)
-carry_over=$(list_events carry_over)
+# Carry-over items (read AFTER transcript scan writes — I3).
+# "Addressed" shares stop-gate.sh Gate 4's semantics exactly: an item counts
+# as addressed once its content hash appears among carry_addressed events.
+# Only UNADDRESSED items are preserved and warned about, so both scripts
+# present the same view once carry_addressed emitters land in a later wave
+# (until then, no carry_addressed events exist and every item is unresolved —
+# identical to v3's always-warn effective behavior).
+carry_over=""
+carry_items=$(list_events carry_over)
+if [ -n "$carry_items" ]; then
+  addressed_hashes=$(list_events carry_addressed)
+  while IFS= read -r item; do
+    [ -z "$item" ] && continue
+    item_hash=$(eio_item_hash "$item")
+    if ! printf '%s\n' "$addressed_hashes" | grep -qxF "$item_hash"; then
+      carry_over="${carry_over}${carry_over:+$'\n'}${item}"
+    fi
+  done <<< "$carry_items"
+fi
 if [ -n "$carry_over" ]; then
   summary="${summary}"$'\n\n'"Carry-over items:"$'\n'"${carry_over}"
 fi
@@ -75,13 +92,9 @@ if [ "${edits:-0}" -gt 0 ]; then
   summary="${summary}"$'\n'"WARNING: ${edits} uncommitted edits at compaction time."
 fi
 
+# carry_over holds only UNADDRESSED items (hash-reconciled above) — warn
+# whenever any remain, mirroring stop-gate.sh Gate 4's block condition.
 if [ -n "$carry_over" ]; then
-  # v4: "addressed" tracking is not derivable this wave — carry_addressed
-  # emitters land in a later wave (see stop-gate.sh Gate 4 for the read side
-  # once they exist). Warn whenever carry-over items exist, which matches
-  # v3's effective behavior: carry_over_addressed was written "false" at
-  # session-start and never flipped to "true" by any code path, so v3 always
-  # warned when carry-over items were present too.
   summary="${summary}"$'\n'"WARNING: Carry-over items not yet addressed."
 fi
 
