@@ -42,9 +42,9 @@ assert_contains "preserves_carry_over" "$result" "Fix broken pipeline"
 # Test 2: Preserves files-modified list (dedup, flag stripped)
 setup_test
 create_event_log "$_TEST_TMPDIR/.claude" "compact-files" \
-  "1700000001|file_edit|r src/lib/scoring.ts" \
-  "1700000002|file_edit|r src/lib/utils.ts" \
-  "1700000003|file_edit|r src/lib/scoring.ts" > /dev/null
+  "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/scoring.ts" \
+  "1700000002|file_edit|r ${_TEST_TMPDIR}/src/lib/utils.ts" \
+  "1700000003|file_edit|r ${_TEST_TMPDIR}/src/lib/scoring.ts" > /dev/null
 result=$(run_pre_compact "compact-files")
 assert_contains "preserves_files_modified" "$result" "src/lib/scoring.ts"
 assert_contains "preserves_files_modified_dedup_count" "$result" "2 unique"
@@ -55,8 +55,8 @@ create_event_log "$_TEST_TMPDIR/.claude" "compact-stats" \
   "1700000001|commit|abc1234 feat: a" \
   "1700000002|commit|abc5678 feat: b" \
   "1700000003|commit|abc9012 feat: c" \
-  "1700000004|file_edit|r src/a.ts" \
-  "1700000005|file_edit|r src/b.ts" \
+  "1700000004|file_edit|r ${_TEST_TMPDIR}/src/a.ts" \
+  "1700000005|file_edit|r ${_TEST_TMPDIR}/src/b.ts" \
   "1700000006|test_run|vitest" \
   "1700000007|docs_edit|documentation.md" > /dev/null
 result=$(run_pre_compact "compact-stats")
@@ -67,11 +67,11 @@ assert_contains "preserves_session_stats_docs_updated" "$result" "docs_updated=t
 # Test 4: Warns on uncommitted edits (edits since last commit anchor)
 setup_test
 create_event_log "$_TEST_TMPDIR/.claude" "compact-warn-edits" \
-  "1700000001|file_edit|r src/a.ts" \
-  "1700000002|file_edit|r src/b.ts" \
-  "1700000003|file_edit|r src/c.ts" \
-  "1700000004|file_edit|r src/d.ts" \
-  "1700000005|file_edit|r src/e.ts" > /dev/null
+  "1700000001|file_edit|r ${_TEST_TMPDIR}/src/a.ts" \
+  "1700000002|file_edit|r ${_TEST_TMPDIR}/src/b.ts" \
+  "1700000003|file_edit|r ${_TEST_TMPDIR}/src/c.ts" \
+  "1700000004|file_edit|r ${_TEST_TMPDIR}/src/d.ts" \
+  "1700000005|file_edit|r ${_TEST_TMPDIR}/src/e.ts" > /dev/null
 result=$(run_pre_compact "compact-warn-edits")
 assert_contains "warns_uncommitted_edits" "$result" "uncommitted edits"
 

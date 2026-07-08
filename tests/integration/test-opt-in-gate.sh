@@ -129,7 +129,8 @@ assert_tree_unchanged "context_flow_unopted_no_new_files" "$before" "$after"
 setup_test
 PROJ="$_TEST_TMPDIR/proj-stop-gate"
 create_unopted_dir "$PROJ/.claude" > /dev/null
-seed_raw_log "$PROJ/.claude" "uo-stop" "1700000001|file_edit|r src/lib/foo.ts" > /dev/null
+LOG=$(seed_raw_log "$PROJ/.claude" "uo-stop")
+seed_file_edit "$LOG" "r" "${PROJ}/src/lib/foo.ts"
 before=$(find "$PROJ/.claude" | sort)
 set +e
 result=$(printf '%s' "{\"session_id\":\"uo-stop\"}" | CORTEX_PROJECT_DIR="$PROJ" bash "$PLUGIN_ROOT/hooks/scripts/stop-gate.sh" 2>/dev/null)
@@ -147,7 +148,8 @@ assert_tree_unchanged "stop_gate_unopted_no_new_files" "$before" "$after"
 setup_test
 PROJ="$_TEST_TMPDIR/proj-session-end"
 create_unopted_dir "$PROJ/.claude" > /dev/null
-seed_raw_log "$PROJ/.claude" "uo-end" "1700000001|file_edit|r src/lib/foo.ts" > /dev/null
+LOG=$(seed_raw_log "$PROJ/.claude" "uo-end")
+seed_file_edit "$LOG" "r" "${PROJ}/src/lib/foo.ts"
 create_journal "$PROJ" "$(date +%Y-%m-%d)"
 before=$(find "$PROJ/.claude" | sort)
 set +e

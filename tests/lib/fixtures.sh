@@ -61,6 +61,39 @@ create_event_log() {
   echo "$file"
 }
 
+# _SEED_FILE_EDIT_EPOCH: monotonic counter backing seed_file_edit's epochs.
+# Deliberately NOT `date +%s` — see mark_opted_in's comment above on why
+# calling `date` from a fixture helper is a landmine (create_mock_date's
+# 2nd+ call recursion; now fixed, but a fixture helper used by every
+# file_edit-seeding test has no business depending on it either way).
+# Base value matches this file's other fixed-epoch conventions.
+_SEED_FILE_EDIT_EPOCH=1700000000
+
+# seed_file_edit <log> <flag> <path>
+# Appends a well-formed "epoch|file_edit|<flag> <path>" event line to <log>.
+# Fixture/production drift guard: REFUSES (returns 1, message to stderr,
+# nothing appended) flag "r" paired with a non-absolute <path>. Production
+# (post-edit-dispatch.sh) only ever writes flag "r" for a file_path that
+# already matched `[[ "$file_path" == "${PROJECT_DIR}"* ]]` — i.e. an
+# ABSOLUTE path under the project dir — so an "r" seed with a relative path
+# is a fixture lying about a scenario production can't actually produce,
+# which can hide a real bug in whatever reads that flag. Flag "x"
+# (external/gitignored) has no such constraint.
+seed_file_edit() {
+  local log="$1" flag="$2" path="$3"
+  if [ "$flag" = "r" ]; then
+    case "$path" in
+      /*|[A-Za-z]:/*|[A-Za-z]:\\*) ;;  # absolute: POSIX or Windows drive-letter
+      *)
+        echo "seed_file_edit: refusing flag 'r' with non-absolute path: $path" >&2
+        return 1
+        ;;
+    esac
+  fi
+  _SEED_FILE_EDIT_EPOCH=$((_SEED_FILE_EDIT_EPOCH + 1))
+  printf '%s|file_edit|%s %s\n' "$_SEED_FILE_EDIT_EPOCH" "$flag" "$path" >> "$log"
+}
+
 # create_state_file <dir> <session_id> [overrides...]
 # Creates a well-formed state file. Overrides: "field=value" pairs.
 # Returns the file path.

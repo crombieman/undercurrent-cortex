@@ -40,11 +40,12 @@ assert_contains "file_path_tracked" "$result" "src/lib/scoring.ts"
 
 # Test 3: Same file edited 3 times triggers re-edit warning
 setup_test
-LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "re-edit" \
-  "1700000001|file_edit|r src/lib/problem.ts" \
-  "1700000002|file_edit|r src/lib/problem.ts")
+problem_file="${_TEST_TMPDIR}/src/lib/problem.ts"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "re-edit")
+seed_file_edit "$LOG" "r" "$problem_file"
+seed_file_edit "$LOG" "r" "$problem_file"
 # This will be the 3rd edit (count after append = 3)
-result=$(run_post_edit "re-edit" "src/lib/problem.ts")
+result=$(run_post_edit "re-edit" "$problem_file")
 assert_contains "re_edit_warning_at_three" "$result" "Re-edit"
 
 # Test 4: Plugin paths (.claude-plugin/) skip re-edit check
@@ -86,6 +87,27 @@ seed+=("1700000099|threshold_set|15")
 LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "nudge-test" "${seed[@]}")
 result=$(run_post_edit "nudge-test" "${_TEST_TMPDIR}/src/lib/foo.ts")
 assert_contains "commit_nudge_over_threshold" "$result" "commit"
+
+# Test 8b: exact nudge boundary — 15 edits since last commit (== threshold)
+# stays SILENT. post-edit-dispatch.sh:70 uses `-gt`, not `-ge`, so the exact
+# threshold value must never fire.
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "boundary-15" "1700000299|threshold_set|15")
+for i in $(seq 1 14); do
+  seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/boundary15_${i}.ts"
+done
+result=$(run_post_edit "boundary-15" "${_TEST_TMPDIR}/src/lib/boundary15_15.ts")
+assert_not_contains "nudge_silent_at_exactly_15_edits" "$result" "commit"
+
+# Test 8c: exact nudge boundary — 16 edits since last commit (one OVER
+# threshold) FIRES. The counterpart to Test 8b, pinning the exact `-gt` edge.
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "boundary-16" "1700000399|threshold_set|15")
+for i in $(seq 1 15); do
+  seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/boundary16_${i}.ts"
+done
+result=$(run_post_edit "boundary-16" "${_TEST_TMPDIR}/src/lib/boundary16_16.ts")
+assert_contains "nudge_fires_at_exactly_16_edits" "$result" "commit"
 
 # Test 9: Custom threshold (5) with 6 edits triggers nudge
 setup_test

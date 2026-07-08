@@ -57,8 +57,8 @@ assert_eq "all_gates_pass_when_clean" "{}" "$result"
 
 # Test: block when file_edit(r) events exist with no intervening commit anchor
 setup_test
-create_event_log "$_TEST_TMPDIR/.claude" "uncommitted" \
-  "1700000001|file_edit|r src/lib/foo.ts" > /dev/null
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "uncommitted")
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/foo.ts"
 result=$(run_stop_gate "uncommitted")
 assert_contains "block_on_uncommitted_changes" "$result" "block"
 assert_contains "block_on_uncommitted_changes_reason" "$result" "Uncommitted changes"
@@ -81,29 +81,29 @@ assert_eq "git_status_self_heal_clears_false_positive" "{}" "$result"
 
 # Test: block when docs_edit is absent and > 3 unique architectural files touched
 setup_test
-create_event_log "$_TEST_TMPDIR/.claude" "docs-gate" \
-  "1700000001|file_edit|r src/lib/scoring/engine.ts" \
-  "1700000002|file_edit|r src/lib/scoring/v11.ts" \
-  "1700000003|file_edit|r src/lib/utils.ts" \
-  "1700000004|file_edit|r src/lib/constants.ts" > /dev/null
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "docs-gate")
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/scoring/engine.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/scoring/v11.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/utils.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/constants.ts"
 result=$(run_stop_gate "docs-gate")
 assert_contains "block_docs_not_updated" "$result" "documentation.md"
 
 # Test: block when test_run is absent and > 3 unique .ts files touched
 setup_test
-create_event_log "$_TEST_TMPDIR/.claude" "tests-gate" \
-  "1700000001|file_edit|r src/lib/utils.ts" \
-  "1700000002|file_edit|r src/lib/scoring.ts" \
-  "1700000003|file_edit|r src/lib/constants.ts" \
-  "1700000004|file_edit|r src/lib/pipeline.ts" > /dev/null
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "tests-gate")
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/utils.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/scoring.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/constants.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/pipeline.ts"
 result=$(run_stop_gate "tests-gate")
 assert_contains "block_tests_not_run" "$result" "Tests not run"
 
 # Test: docs gate skipped when unique file_count <= 3, even with a scoring path
 # and no docs_edit event (avoid nagging on quick fixes)
 setup_test
-create_event_log "$_TEST_TMPDIR/.claude" "low-edits" \
-  "1700000001|file_edit|r src/lib/scoring/engine.ts" > /dev/null
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "low-edits")
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/scoring/engine.ts"
 result=$(run_stop_gate "low-edits")
 assert_not_contains "skip_docs_gate_low_edits" "$result" "documentation.md"
 assert_contains "skip_docs_gate_low_edits_still_blocks_uncommitted" "$result" "Uncommitted changes"

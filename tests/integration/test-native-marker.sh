@@ -96,7 +96,8 @@ run_stop_gate() {
 # (a) WITHOUT --native + marker present => {} (block suppressed)
 setup_test
 PROJ="$_TEST_TMPDIR/proj-sg-a"
-LOG=$(create_event_log "$PROJ/.claude" "sg-a" "1700000001|file_edit|r src/lib/foo.ts")
+LOG=$(create_event_log "$PROJ/.claude" "sg-a")
+seed_file_edit "$LOG" "r" "${PROJ}/src/lib/foo.ts"
 stamp_native_marker "$PROJ/.claude"
 before=$(count_events stop_blocked '' '' "$LOG")
 result=$(run_stop_gate "$PROJ" "sg-a")
@@ -107,14 +108,16 @@ assert_eq "stop_gate_no_native_marker_suppressed_no_event_appended" "$before" "$
 # (b) WITHOUT --native + NO marker => normal behavior (blocks on uncommitted changes)
 setup_test
 PROJ="$_TEST_TMPDIR/proj-sg-b"
-create_event_log "$PROJ/.claude" "sg-b" "1700000001|file_edit|r src/lib/foo.ts" > /dev/null
+LOG=$(create_event_log "$PROJ/.claude" "sg-b")
+seed_file_edit "$LOG" "r" "${PROJ}/src/lib/foo.ts"
 result=$(run_stop_gate "$PROJ" "sg-b")
 assert_contains "stop_gate_no_native_no_marker_normal_behavior" "$result" "block"
 
 # (c) WITH --native + marker present => normal behavior (blocks on uncommitted changes)
 setup_test
 PROJ="$_TEST_TMPDIR/proj-sg-c"
-create_event_log "$PROJ/.claude" "sg-c" "1700000001|file_edit|r src/lib/foo.ts" > /dev/null
+LOG=$(create_event_log "$PROJ/.claude" "sg-c")
+seed_file_edit "$LOG" "r" "${PROJ}/src/lib/foo.ts"
 stamp_native_marker "$PROJ/.claude"
 result=$(run_stop_gate "$PROJ" "sg-c" --native)
 assert_contains "stop_gate_native_marker_present_normal_behavior" "$result" "block"
