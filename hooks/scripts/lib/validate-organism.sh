@@ -156,6 +156,13 @@ validate_organism() {
         d="${d%/}"
         # Never touch the current week dir.
         [ "$d" = "${wbd_current_week%/}" ] && continue
+        # Only ISO-week-named buckets (YYYY-WNN) are prunable — never stray
+        # dirs (test fixtures, manual backups) that happen to live under
+        # sessions/, no matter how old they are.
+        case "$(basename "$d")" in
+          [0-9][0-9][0-9][0-9]-W[0-9][0-9]) ;;
+          *) continue ;;
+        esac
 
         local d_epoch
         d_epoch=$(stat -c %Y "$d" 2>/dev/null || stat -f %m "$d" 2>/dev/null || echo "0")

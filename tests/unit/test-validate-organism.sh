@@ -116,6 +116,20 @@ validate_organism >/dev/null 2>&1 || true
 result="present"; [ -d "$mixed_dir" ] || result="removed"
 assert_eq "week_dir_pruning_skips_dir_with_recent_file" "present" "$result"
 
+# Aged stray dir NOT matching the YYYY-WNN week pattern survives pruning —
+# only ISO-week buckets are prunable (guards test fixtures / manual backups
+# that happen to live under sessions/, even when fully aged past the cutoff).
+setup_test
+override_state_paths "$_TEST_TMPDIR"
+stray_dir="$(_eio_sessions_dir)/test-week"
+mkdir -p "$stray_dir"
+touch "$stray_dir/stray-sid.local.md"
+touch -t "$OLD_TS" "$stray_dir/stray-sid.local.md"
+touch -t "$OLD_TS" "$stray_dir"
+validate_organism >/dev/null 2>&1 || true
+result="present"; [ -d "$stray_dir" ] || result="removed"
+assert_eq "week_dir_pruning_skips_non_week_named_dirs" "present" "$result"
+
 unset CORTEX_PROJECT_DIR_OVERRIDE
 
 end_suite
