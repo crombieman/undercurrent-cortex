@@ -19,11 +19,14 @@ HOOK_INPUT=$(cat)
 # Extract session_id from hook JSON (Claude Code provides this)
 HOOK_SESSION_ID=""
 if [ -n "$HOOK_INPUT" ]; then
+  # || true inside each substitution: jq/python3 exit non-zero on malformed JSON,
+  # and under set -euo pipefail a failing assignment kills the whole hook (contract
+  # violation: session-start always exits 0 with JSON). Mirrors resolve_event_log.
   if command -v jq >/dev/null 2>&1; then
-    HOOK_SESSION_ID=$(echo "$HOOK_INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+    HOOK_SESSION_ID=$(echo "$HOOK_INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
   fi
   if [ -z "$HOOK_SESSION_ID" ] && command -v python3 >/dev/null 2>&1; then
-    HOOK_SESSION_ID=$(echo "$HOOK_INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null)
+    HOOK_SESSION_ID=$(echo "$HOOK_INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null || true)
   fi
   if [ -z "$HOOK_SESSION_ID" ]; then
     local_tmp="${HOOK_INPUT#*\"session_id\":\"}"
@@ -32,23 +35,29 @@ if [ -n "$HOOK_INPUT" ]; then
     fi
   fi
 fi
-# Fallback: use epoch timestamp if no session_id from Claude Code
-[ -z "$HOOK_SESSION_ID" ] && HOOK_SESSION_ID="$(date +%s)"
+# Fallback: epoch + PID if no session_id from Claude Code. The `-$$` suffix makes
+# concurrent boots in the same second collision-resistant (distinct log files).
+[ -z "$HOOK_SESSION_ID" ] && HOOK_SESSION_ID="$(date +%s)-$$"
 
 # --- Create the per-session event log (the ONLY place it is created) ---
 # Line format: epoch|session_start|<iso8601-utc> <model_name>. The first value
 # token is a HARD contract: stop-gate Gate 6 parses it as the git --since anchor.
 # model_name is "unknown" at boot (matches v3's model_name=unknown default).
 # printf (not append_event) because the file does not exist yet.
-mkdir -p "$(_eio_week_dir)"
+mkdir -p "$(_eio_week_dir)" 2>/dev/null || true
 EVENT_LOG="$(_eio_week_dir)/${HOOK_SESSION_ID}.events.log"
-printf '%s|session_start|%s %s\n' "$(date +%s)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "unknown" > "$EVENT_LOG"
+# No-clobber: never truncate an existing log (a resumed session with the same id
+# keeps its prior events). Only create — and seed the session_start anchor — when
+# the file does not yet exist. Degraded mode (write fails) must not abort the hook.
+if [ ! -f "$EVENT_LOG" ]; then
+  printf '%s|session_start|%s %s\n' "$(date +%s)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "unknown" > "$EVENT_LOG" 2>/dev/null || true
+fi
 
 # Write current session_id to a known location so the session-end skill
 # can pass it to session-end-dispatch.sh, and read surfaces (statusline,
 # sensory mid-session) can resolve when their hook JSON lacks a session_id.
-mkdir -p "$CORTEX_DIR"
-echo "$HOOK_SESSION_ID" > "${CORTEX_DIR}/current-session.id"
+mkdir -p "$CORTEX_DIR" 2>/dev/null || true
+echo "$HOOK_SESSION_ID" > "${CORTEX_DIR}/current-session.id" 2>/dev/null || true
 
 # Profile drives proposals/social/sensory/feedback gating below.
 PROFILE=$(get_profile)
@@ -194,9 +203,12 @@ fi
 health_warning=""
 if [ -f "$HEALTH_FILE" ]; then
   # Read pre-computed rolling averages from header
-  h_avg_rm=$(grep '^avg_reasoning_misses=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r')
-  h_avg_epc=$(grep '^avg_edits_per_commit=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r')
-  h_trend=$(grep '^trend_direction=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r')
+  # `|| true` inside each substitution: grep exits 1 when the header line is
+  # absent (header-only or partial health file); under pipefail that would kill
+  # the hook. Empty result falls back to the ${:-default} at the use site.
+  h_avg_rm=$(grep '^avg_reasoning_misses=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r' || true)
+  h_avg_epc=$(grep '^avg_edits_per_commit=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r' || true)
+  h_trend=$(grep '^trend_direction=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r' || true)
   h_data_count=0
   if grep -v '^#' "$HEALTH_FILE" 2>/dev/null | grep -v '^$' | grep -v '^trend_' | grep -v '^avg_' | grep -v '^---' | grep -q '|' 2>/dev/null; then
     h_data_count=$(grep -v '^#' "$HEALTH_FILE" 2>/dev/null | grep -v '^$' | grep -v '^trend_' | grep -v '^avg_' | grep -v '^---' | grep -c '|')
@@ -216,13 +228,13 @@ if [ -f "$HEALTH_FILE" ]; then
   fi
 
   # Trend direction check
-  trend=$(grep '^trend_direction=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r')
+  trend=$(grep '^trend_direction=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r' || true)
   if [ "$trend" = "degrading" ]; then
     health_warning="${health_warning}"$'\n'"Health: DEGRADING trend detected. reasoning-misses increasing. Slow down and plan more carefully."
   fi
 
   # Commit granularity check
-  avg_epc=$(grep '^avg_edits_per_commit=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r')
+  avg_epc=$(grep '^avg_edits_per_commit=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r' || true)
   if [ -n "$avg_epc" ]; then
     high_epc=$(awk "BEGIN { print ($avg_epc > 15.0) }")
     if [ "$high_epc" = "1" ]; then
@@ -240,7 +252,7 @@ fb_reason="boot"
 fb_commit_threshold=15
 
 if [ "$PROFILE" != "minimal" ] && [ -f "$HEALTH_FILE" ]; then
-  fb_trend=$(grep '^trend_direction=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r')
+  fb_trend=$(grep '^trend_direction=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r' || true)
 
   # Trend-based mode
   if [ "$fb_trend" = "degrading" ]; then
@@ -248,8 +260,10 @@ if [ "$PROFILE" != "minimal" ] && [ -f "$HEALTH_FILE" ]; then
     fb_reason="trend"
   fi
 
-  # Topology-based mode: last 3 data rows all high-churn
-  fb_data_rows=$(grep -v '^#' "$HEALTH_FILE" 2>/dev/null | grep -v '^$' | grep -v '^trend_' | grep -v '^avg_' | grep -v '^---' | grep '|' | tail -3)
+  # Topology-based mode: last 3 data rows all high-churn.
+  # `|| true`: the grep -v chain empties out (exit 1) on a header-only file; under
+  # pipefail the unguarded assignment would kill the hook. Empty => 0 rows below.
+  fb_data_rows=$(grep -v '^#' "$HEALTH_FILE" 2>/dev/null | grep -v '^$' | grep -v '^trend_' | grep -v '^avg_' | grep -v '^---' | grep '|' | tail -3 || true)
   fb_row_count=0
   if echo "$fb_data_rows" | grep -q '|' 2>/dev/null; then
     fb_row_count=$(echo "$fb_data_rows" | grep -c '|')
@@ -263,7 +277,7 @@ if [ "$PROFILE" != "minimal" ] && [ -f "$HEALTH_FILE" ]; then
   fi
 
   # Commit threshold adjustment
-  fb_avg_epc=$(grep '^avg_edits_per_commit=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r')
+  fb_avg_epc=$(grep '^avg_edits_per_commit=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r' || true)
   if [ -n "$fb_avg_epc" ]; then
     fb_high25=$(awk "BEGIN { print ($fb_avg_epc > 25.0) }" 2>/dev/null || echo "0")
     fb_high15=$(awk "BEGIN { print ($fb_avg_epc > 15.0) }" 2>/dev/null || echo "0")
@@ -340,8 +354,9 @@ fi
 social_warnings=""
 
 if [ "$PROFILE" != "minimal" ] && [ -f "$HEALTH_FILE" ]; then
-  # Get last 5 data rows (skip headers/metadata)
-  social_data=$(grep -v '^#' "$HEALTH_FILE" 2>/dev/null | grep -v '^$' | grep -v '^trend_' | grep -v '^avg_' | grep -v '^---' | grep '|' | tail -5)
+  # Get last 5 data rows (skip headers/metadata). `|| true`: the grep -v chain
+  # empties out (exit 1) on a header-only file; pipefail would otherwise abort.
+  social_data=$(grep -v '^#' "$HEALTH_FILE" 2>/dev/null | grep -v '^$' | grep -v '^trend_' | grep -v '^avg_' | grep -v '^---' | grep '|' | tail -5 || true)
   social_row_count=0
   if [ -n "$social_data" ]; then
     social_row_count=$(echo "$social_data" | wc -l | tr -d ' ')

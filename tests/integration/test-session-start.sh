@@ -183,5 +183,43 @@ set -e
 assert_eq "empty_stdin_exit_0" "0" "$rc"
 assert_json_valid "empty_stdin_valid_json" "$result"
 
+# --- Test 12: malformed (non-JSON) stdin still exits 0 with valid JSON ---
+# jq/python3 sid-extraction exit non-zero on garbage; under set -euo pipefail the
+# failing command substitution must not kill the hook (contract: exit 0 + JSON).
+setup_test
+set +e
+result=$(printf 'not valid json {{{' | HOME="$_TEST_TMPDIR" bash "$SANDBOX/hooks/session-start" 2>/dev/null)
+rc=$?
+set -e
+assert_eq "malformed_stdin_exit_0" "0" "$rc"
+assert_json_valid "malformed_stdin_valid_json" "$result"
+
+# --- Test 13: a pre-existing event log is NOT clobbered by a same-sid start ---
+# session-start must skip the `>` create when the log already exists, so prior
+# events (e.g. from a resumed session with the same id) survive.
+setup_test
+sid="ss-noclobber"
+mkdir -p "$(_eio_week_dir)"
+PRELOG="$(_eio_week_dir)/${sid}.events.log"
+printf '%s|session_start|2026-03-14T00:00:00Z unknown\n' "1700000000" > "$PRELOG"
+printf '%s|tool_call|SentinelTool\n' "1700000009" >> "$PRELOG"
+run_session_start "$(mock_json "session_id=$sid")" > /dev/null
+assert_contains "preexisting_event_survives_second_start" \
+  "$(list_events tool_call "$PRELOG")" "SentinelTool"
+
+# --- Test 14: header-only health file (zero data rows) does not crash start ---
+# The health-file grep pipelines exit non-zero when a grep -v chain empties out;
+# under pipefail the unguarded assignment would kill the hook mid-flight.
+setup_test
+sid="ss-headeronly-health"
+mkdir -p "$_TEST_TMPDIR/.claude/cortex"
+create_health_file "$_TEST_TMPDIR/.claude/cortex/health.local.md"
+set +e
+result=$(printf '%s' "$(mock_json "session_id=$sid")" | HOME="$_TEST_TMPDIR" bash "$SANDBOX/hooks/session-start" 2>/dev/null)
+rc=$?
+set -e
+assert_eq "header_only_health_exit_0" "0" "$rc"
+assert_json_valid "header_only_health_valid_json" "$result"
+
 export PATH="$SAVED_PATH"
 end_suite
