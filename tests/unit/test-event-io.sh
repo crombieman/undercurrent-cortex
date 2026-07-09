@@ -238,6 +238,63 @@ lf1=$(create_event_log "$TDIRU/.claude" "u-f1" "1700000100|carry_over|Dup item")
 lf2=$(create_event_log "$TDIRU/.claude" "u-f2" "1700000200|carry_over|Dup item")
 assert_eq "unresolved_dedup_single_line" "Dup item" "$(eio_unresolved_items "$lf1" "$lf2")"
 
+# --- eio_config_get (wave 4: per-project config.local, spec §7.1) ---
+TDIRC=$(mktemp -d)
+CORTEX_PROJECT_DIR_OVERRIDE="$TDIRC"
+
+# missing file entirely => default (or empty when no default given)
+assert_eq "config_missing_file_default" "fallback" "$(eio_config_get some_key "fallback")"
+assert_eq "config_missing_file_no_default_empty" "" "$(eio_config_get some_key)"
+
+mkdir -p "$TDIRC/.claude/cortex"
+CFG="$TDIRC/.claude/cortex/config.local"
+
+# file exists but key absent => default
+printf 'other_key=x\n' > "$CFG"
+assert_eq "config_missing_key_default" "fallback" "$(eio_config_get some_key "fallback")"
+
+# basic key=value
+printf 'docs_file=readme.md\n' > "$CFG"
+assert_eq "config_basic_value" "readme.md" "$(eio_config_get docs_file)"
+
+# first match wins (repeated key — later duplicate ignored)
+printf 'architectural_patterns=foo|bar\narchitectural_patterns=SHOULD_NOT_WIN\n' > "$CFG"
+assert_eq "config_first_match_wins" "foo|bar" "$(eio_config_get architectural_patterns)"
+
+# comment lines skipped, including indented comments
+printf '# comment line\n  # indented comment\nlessons_file=notes/lessons.md\n' > "$CFG"
+assert_eq "config_comments_skipped" "notes/lessons.md" "$(eio_config_get lessons_file)"
+
+# a commented-out key is NOT picked up as a match
+printf '# docs_file=should-be-ignored.md\ndocs_file=real.md\n' > "$CFG"
+assert_eq "config_commented_key_ignored" "real.md" "$(eio_config_get docs_file)"
+
+# trailing CRLF stripped from value
+printf 'docs_file=windows.md\r\n' > "$CFG"
+assert_eq "config_crlf_stripped" "windows.md" "$(eio_config_get docs_file)"
+
+# value containing '=' and '|' preserved verbatim (split on FIRST '=' only)
+printf 'architectural_patterns=a=b|c=d\n' > "$CFG"
+assert_eq "config_value_with_equals_and_pipe" "a=b|c=d" "$(eio_config_get architectural_patterns)"
+
+# empty value (key with nothing after '=') => empty string, NOT the default
+printf 'commit_nudge_threshold=\n' > "$CFG"
+assert_eq "config_empty_value_not_default" "" "$(eio_config_get commit_nudge_threshold "99")"
+
+unset CORTEX_PROJECT_DIR_OVERRIDE
+rm -rf "$TDIRC"
+
+# --- eio_config_get: errexit-safe even when the cortex dir doesn't exist at all ---
+rc=0
+out=$(bash -c '
+  set -euo pipefail
+  source "$1"
+  export CORTEX_PROJECT_DIR_OVERRIDE="$2"
+  eio_config_get some_key "safe-default"
+' _ "$PLUGIN_ROOT/hooks/scripts/lib/event-io.sh" "$(mktemp -d)") || rc=$?
+assert_eq "config_get_errexit_safe_rc" "0" "$rc"
+assert_eq "config_get_errexit_safe_value" "safe-default" "$out"
+
 # --- resolve_event_log: malformed JSON must not crash under errexit ---
 # jq/python3 reject the input; the extraction substitutions must swallow the
 # parser failure (hooks contract: always exit 0). Run in a fresh errexit shell

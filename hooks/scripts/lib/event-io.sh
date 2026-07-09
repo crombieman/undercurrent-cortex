@@ -305,3 +305,48 @@ normalize_path() {
   fi
   echo "$p"
 }
+
+# --- Wave 4 helpers (per-project config.local, spec §7.1) ---
+
+# eio_config_get <key> [default]
+# Reads $(_eio_cortex_dir)/config.local — a project-local file for vocabulary
+# that must NOT be hardcoded into the public plugin (architectural_patterns,
+# docs_file, lessons_file, test_command, commit_nudge_threshold). Format:
+# "key=value" lines. FIRST match wins on a repeated key. Lines whose first
+# non-whitespace char is '#' are comments and are skipped. Trailing \r is
+# stripped before parsing (Windows-authored config files). The value is
+# EVERYTHING after the FIRST '=' on the line, so values may themselves
+# contain '=' or '|' (e.g. an ERE alternation). Missing file or missing key
+# => echoes <default> (empty string if omitted). A key present with an empty
+# value ("key=") echoes empty — NOT the default; only an absent key falls
+# back. Errexit-safe: the awk lookup's exit status is captured via `|| ...`,
+# never left bare under the callers' set -euo pipefail.
+eio_config_get() {
+  local key="$1" default="${2:-}" file
+  file="$(_eio_cortex_dir)/config.local"
+  [ -f "$file" ] || { echo "$default"; return 0; }
+
+  local val="" hit=1
+  val=$(KEY="$key" awk '
+    { sub(/\r$/, "") }
+    /^[[:space:]]*#/ { next }
+    {
+      line = $0
+      sub(/^[[:space:]]*/, "", line)
+      eq = index(line, "=")
+      if (eq == 0) next
+      k = substr(line, 1, eq - 1)
+      if (k != ENVIRON["KEY"]) next
+      print substr(line, eq + 1)
+      found = 1
+      exit
+    }
+    END { if (!found) exit 1 }
+  ' "$file" 2>/dev/null) || hit=0
+
+  if [ "$hit" -eq 1 ]; then
+    echo "$val"
+  else
+    echo "$default"
+  fi
+}

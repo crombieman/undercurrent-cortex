@@ -111,11 +111,16 @@ fi
 
 if [ "$file_count" -gt 3 ]; then
 
-  # Gate 2: documentation.md not updated after architectural changes
+  # Gate 2: <docs_file> not updated after architectural changes. Per-project
+  # config (spec §7.1) — architectural_patterns has NO default, so an
+  # unconfigured project leaves this gate fully inactive (keeps
+  # Undercurrent-specific vocabulary out of the public plugin).
   docs_edit_count=$(count_events docs_edit)
   if [ "$docs_edit_count" -eq 0 ]; then
-    if echo "$files_modified" | grep -qiE 'scoring|pipeline|v10|v11|constants|middleware|cached-loader|signals'; then
-      add_failure "docs" "documentation.md not updated after architectural changes"
+    arch_patterns=$(eio_config_get architectural_patterns)
+    if [ -n "$arch_patterns" ] && echo "$files_modified" | grep -qiE "$arch_patterns"; then
+      docs_file=$(eio_config_get docs_file "documentation.md")
+      add_failure "docs" "${docs_file} not updated after architectural changes"
     fi
   fi
 
@@ -173,7 +178,8 @@ if [ "$commits_count_g6" -gt 0 ]; then
       case "$profile" in
         minimal) ;; # no enforcement
         *)
-          add_failure "root_cause" "Root cause not documented after fix: commit. Update tasks/lessons.md with pattern + prevention rule."
+          lessons_file=$(eio_config_get lessons_file "tasks/lessons.md")
+          add_failure "root_cause" "Root cause not documented after fix: commit. Update ${lessons_file} with pattern + prevention rule."
           ;;
       esac
     fi

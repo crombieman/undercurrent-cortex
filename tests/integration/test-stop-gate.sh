@@ -79,8 +79,24 @@ assert_eq "git_status_self_heal_clears_false_positive" "{}" "$result"
 
 # --- Gates 2 & 3: docs / tests, only fire when file_count > 3 ---
 
-# Test: block when docs_edit is absent and > 3 unique architectural files touched
+# Test: Gate 2 is INACTIVE by default (no config.local) — spec §7.1: an
+# unconfigured project keeps Undercurrent-specific vocabulary out of the
+# public plugin, even when paths "look" architectural under the old
+# hardcoded pattern and file_count > 3 with no docs_edit event.
 setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "docs-gate-unconfigured")
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/scoring/engine.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/scoring/v11.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/utils.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/constants.ts"
+result=$(run_stop_gate "docs-gate-unconfigured")
+assert_not_contains "gate2_inactive_without_config" "$result" "documentation.md"
+
+# Test: block when docs_edit is absent and > 3 unique architectural files touched
+# — architectural_patterns configured explicitly (spec §7.1: reproduces the
+# old hardcoded Undercurrent vocabulary via config.local)
+setup_test
+set_config "$_TEST_TMPDIR/.claude" "architectural_patterns" "scoring|pipeline|v10|v11|constants|middleware|cached-loader|signals"
 LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "docs-gate")
 seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/scoring/engine.ts"
 seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/scoring/v11.ts"
@@ -88,6 +104,19 @@ seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/utils.ts"
 seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/constants.ts"
 result=$(run_stop_gate "docs-gate")
 assert_contains "block_docs_not_updated" "$result" "documentation.md"
+
+# Test: Gate 2's docs-file text honors a custom docs_file config value
+setup_test
+set_config "$_TEST_TMPDIR/.claude" "architectural_patterns" "scoring"
+set_config "$_TEST_TMPDIR/.claude" "docs_file" "ARCHITECTURE.md"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "docs-gate-custom")
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/scoring/engine.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/utils.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/constants.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/other.ts"
+result=$(run_stop_gate "docs-gate-custom")
+assert_contains "gate2_custom_docs_file_text" "$result" "ARCHITECTURE.md"
+assert_not_contains "gate2_custom_docs_file_no_default_text" "$result" "documentation.md not updated"
 
 # Test: block when test_run is absent and > 3 unique .ts files touched
 setup_test
@@ -161,6 +190,21 @@ create_event_log "$GITDIR/.claude" "rootcause" \
   "1700000001|commit|abc1234 fix: something broke" > /dev/null
 result=$(run_stop_gate_in "$GITDIR" "rootcause")
 assert_contains "block_root_cause_not_documented" "$result" "Root cause not documented"
+assert_contains "block_root_cause_default_lessons_file_text" "$result" "tasks/lessons.md"
+
+# Test: Gate 6's reason text honors a custom lessons_file config value
+setup_test
+GITDIR="$_TEST_TMPDIR/git-rootcause-custom"
+init_git_repo "$GITDIR"
+echo "x" > "$GITDIR/f.txt"
+git -C "$GITDIR" add -A
+git -C "$GITDIR" commit -q -m "fix: something broke"
+set_config "$GITDIR/.claude" "lessons_file" "docs/CHANGELOG.md"
+create_event_log "$GITDIR/.claude" "rootcause-custom" \
+  "1700000001|commit|abc1234 fix: something broke" > /dev/null
+result=$(run_stop_gate_in "$GITDIR" "rootcause-custom")
+assert_contains "gate6_custom_lessons_file_text" "$result" "docs/CHANGELOG.md"
+assert_not_contains "gate6_custom_lessons_file_no_default_text" "$result" "tasks/lessons.md"
 
 # Test: root-cause gate exempt under the minimal profile
 setup_test

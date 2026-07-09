@@ -63,6 +63,23 @@ run_post_edit "docs-edit" "documentation.md" > /dev/null
 result=$(list_events docs_edit "$LOG")
 assert_contains "docs_edit_sets_flag" "$result" "documentation.md"
 
+# Test 5b: docs_edit detection honors a custom docs_file config value —
+# editing the configured file fires; editing the OLD default no longer does
+# (spec §7.1 — docs_file is per-project, no longer hardcoded)
+setup_test
+set_config "$_TEST_TMPDIR/.claude" "docs_file" "ARCHITECTURE.md"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "docs-edit-custom")
+run_post_edit "docs-edit-custom" "src/ARCHITECTURE.md" > /dev/null
+result=$(list_events docs_edit "$LOG")
+assert_contains "docs_edit_custom_file_fires" "$result" "ARCHITECTURE.md"
+
+setup_test
+set_config "$_TEST_TMPDIR/.claude" "docs_file" "ARCHITECTURE.md"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "docs-edit-custom-old-default")
+run_post_edit "docs-edit-custom-old-default" "documentation.md" > /dev/null
+result=$(list_events docs_edit "$LOG")
+assert_eq "docs_edit_old_default_silent_when_custom_configured" "" "$result"
+
 # Test 6: Editing a memory/*.md journal file appends a journal_edit event
 setup_test
 LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "journal-edit")
@@ -76,6 +93,30 @@ LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "lessons-edit")
 run_post_edit "lessons-edit" "tasks/lessons.md" > /dev/null
 result=$(last_event root_cause_logged "$LOG")
 assert_eq "lessons_edit_logs_root_cause" "true" "$result"
+
+# Test 7b: lessons detection honors a custom lessons_file config value —
+# editing the configured basename fires (case-insensitively); editing the
+# OLD default no longer does (spec §7.1 — lessons_file is per-project)
+setup_test
+set_config "$_TEST_TMPDIR/.claude" "lessons_file" "docs/CHANGELOG.md"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "lessons-edit-custom")
+run_post_edit "lessons-edit-custom" "docs/CHANGELOG.md" > /dev/null
+result=$(last_event root_cause_logged "$LOG")
+assert_eq "lessons_edit_custom_file_fires" "true" "$result"
+
+setup_test
+set_config "$_TEST_TMPDIR/.claude" "lessons_file" "docs/CHANGELOG.md"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "lessons-edit-custom-case")
+run_post_edit "lessons-edit-custom-case" "docs/CHANGELOG.MD" > /dev/null
+result=$(last_event root_cause_logged "$LOG")
+assert_eq "lessons_edit_custom_file_case_insensitive" "true" "$result"
+
+setup_test
+set_config "$_TEST_TMPDIR/.claude" "lessons_file" "docs/CHANGELOG.md"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "lessons-edit-custom-old-default")
+run_post_edit "lessons-edit-custom-old-default" "tasks/lessons.md" > /dev/null
+result=$(last_event root_cause_logged "$LOG")
+assert_eq "lessons_edit_old_default_silent_when_custom_configured" "" "$result"
 
 # Test 8: Over 15 edits triggers commit nudge
 setup_test
@@ -120,11 +161,56 @@ LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "custom-thresh" "${seed[@]}")
 result=$(run_post_edit "custom-thresh" "${_TEST_TMPDIR}/src/lib/bar.ts")
 assert_contains "custom_threshold_nudge" "$result" "commit"
 
-# Test 10: Editing scoring file without a prior docs_edit triggers reminder
+# Test 9b: commit_nudge_threshold config OVERRIDES the threshold_set event
+# value (spec §7.1) — event says 15, config says 3; 4 edits (> 3) fires.
 setup_test
+set_config "$_TEST_TMPDIR/.claude" "commit_nudge_threshold" "3"
+seed=()
+for i in $(seq 1 3); do
+  seed+=("$((1700000200 + i))|file_edit|r ${_TEST_TMPDIR}/src/lib/cfgthresh${i}.ts")
+done
+seed+=("1700000299|threshold_set|15")
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "cfg-thresh-override" "${seed[@]}")
+result=$(run_post_edit "cfg-thresh-override" "${_TEST_TMPDIR}/src/lib/cfgthresh4.ts")
+assert_contains "config_threshold_overrides_event" "$result" "commit"
+
+# Test 9c: non-numeric commit_nudge_threshold config is IGNORED — falls back
+# to the threshold_set event value (15). 15 edits (== threshold) stays silent.
+setup_test
+set_config "$_TEST_TMPDIR/.claude" "commit_nudge_threshold" "not-a-number"
+seed=()
+for i in $(seq 1 14); do
+  seed+=("$((1700000300 + i))|file_edit|r ${_TEST_TMPDIR}/src/lib/nonnum${i}.ts")
+done
+seed+=("1700000399|threshold_set|15")
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "cfg-thresh-nonnumeric" "${seed[@]}")
+result=$(run_post_edit "cfg-thresh-nonnumeric" "${_TEST_TMPDIR}/src/lib/nonnum15.ts")
+assert_not_contains "non_numeric_config_threshold_ignored" "$result" "commit"
+
+# Test 10a: doc-sync reminder is INACTIVE by default (no config.local) — spec
+# §7.1: an unconfigured project never fires the reminder, even on a path that
+# "looks" architectural under the old hardcoded pattern.
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "arch-remind-unconfigured")
+result=$(run_post_edit "arch-remind-unconfigured" "src/lib/scoring/v11.ts")
+assert_not_contains "arch_reminder_inactive_without_config" "$result" "documentation.md"
+assert_eq "arch_reminder_inactive_without_config_empty" "{}" "$result"
+
+# Test 10: Editing scoring file without a prior docs_edit triggers reminder
+# (architectural_patterns configured explicitly — spec §7.1)
+setup_test
+set_config "$_TEST_TMPDIR/.claude" "architectural_patterns" "scoring|pipeline|v10|v11"
 LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "arch-remind")
 result=$(run_post_edit "arch-remind" "src/lib/scoring/v11.ts")
 assert_contains "scoring_file_doc_reminder" "$result" "documentation.md"
+
+# Test 10b: doc-sync reminder text honors a custom docs_file config value
+setup_test
+set_config "$_TEST_TMPDIR/.claude" "architectural_patterns" "scoring"
+set_config "$_TEST_TMPDIR/.claude" "docs_file" "ARCHITECTURE.md"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "arch-remind-custom")
+result=$(run_post_edit "arch-remind-custom" "src/lib/scoring/v11.ts")
+assert_contains "arch_reminder_custom_docs_file_text" "$result" "ARCHITECTURE.md"
 
 # Test 11: Normal edit under threshold, docs already synced, returns {}
 setup_test

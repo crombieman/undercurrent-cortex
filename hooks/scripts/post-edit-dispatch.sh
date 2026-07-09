@@ -48,8 +48,12 @@ if ! echo "$file_path" | grep -qE '\.claude-plugin/|\.claude/'; then
   fi
 fi
 
-# Check for documentation.md update
-if [[ "$file_path" == *"documentation.md"* ]]; then
+# Check for docs-file update. Per-project config (spec §7.1) — default
+# documentation.md; substring match on the configured file's basename (same
+# semantics as the old hardcoded check).
+docs_file=$(eio_config_get docs_file "documentation.md")
+docs_basename=$(basename "$docs_file")
+if [[ "$file_path" == *"$docs_basename"* ]]; then
   append_event "docs_edit" "$file_path"
 fi
 
@@ -58,15 +62,31 @@ if echo "$file_path" | grep -qE 'memory/.*\.md'; then
   append_event "journal_edit" "$file_path"
 fi
 
-# Track lessons.md updates for root cause documentation gate
-if echo "$file_path" | grep -qiE '/lessons\.md$'; then
+# Track lessons-file updates for root cause documentation gate. Per-project
+# config (spec §7.1) — default tasks/lessons.md; path must END with
+# "/<basename>", case-insensitive (matches the old hardcoded check's regex).
+lessons_file=$(eio_config_get lessons_file "tasks/lessons.md")
+lessons_basename=$(basename "$lessons_file")
+shopt -s nocasematch
+if [[ "$file_path" == */"$lessons_basename" ]]; then
   append_event "root_cause_logged" "true"
 fi
+shopt -u nocasematch
 
-# Commit cadence nudge (dynamic threshold from feedback loop)
+# Commit cadence nudge (dynamic threshold from feedback loop, overridable via
+# per-project config — spec §7.1). commit_nudge_threshold config wins over the
+# feedback-derived threshold_set event when set to a genuine integer;
+# non-numeric config values are ignored (fall back to current behavior).
 edits=$(count_events "file_edit" "r" "commit")
 threshold=$(last_event "threshold_set")
 threshold="${threshold:-15}"
+cfg_threshold=$(eio_config_get commit_nudge_threshold)
+if [ -n "$cfg_threshold" ]; then
+  case "$cfg_threshold" in
+    ''|*[!0-9]*) : ;;  # non-numeric — ignore, keep feedback-derived threshold
+    *) threshold="$cfg_threshold" ;;
+  esac
+fi
 if [ "${edits:-0}" -gt "$threshold" ]; then
   source "$SCRIPT_DIR/lib/escape-json.sh" || true
   msg=$(escape_for_json "You have ${edits} edits since last commit (threshold: ${threshold}). Consider committing — many edits since last commit.")
@@ -74,11 +94,15 @@ if [ "${edits:-0}" -gt "$threshold" ]; then
   exit 0
 fi
 
-# Doc-sync reminder for architectural files
+# Doc-sync reminder for architectural files. Per-project config (spec §7.1) —
+# architectural_patterns has NO default, so this reminder never fires unless
+# a project explicitly opts in via config.local (keeps Undercurrent-specific
+# vocabulary out of the public plugin).
 docs_edit_count=$(count_events "docs_edit")
-if [ "$docs_edit_count" -eq 0 ] && echo "$file_path" | grep -qiE 'scoring|pipeline|v10|v11|constants|middleware|signals|cached-loader|env\.ts|cron|batch-upsert|stripe'; then
+arch_patterns=$(eio_config_get architectural_patterns)
+if [ "$docs_edit_count" -eq 0 ] && [ -n "$arch_patterns" ] && echo "$file_path" | grep -qiE "$arch_patterns"; then
   source "$SCRIPT_DIR/lib/escape-json.sh" || true
-  msg=$(escape_for_json "Architectural file modified. Consider updating documentation.md.")
+  msg=$(escape_for_json "Architectural file modified. Consider updating ${docs_file}.")
   printf '{"systemMessage":"%s"}' "$msg"
   exit 0
 fi

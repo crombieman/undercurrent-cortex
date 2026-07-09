@@ -94,6 +94,18 @@ seed_file_edit() {
   printf '%s|file_edit|%s %s\n' "$_SEED_FILE_EDIT_EPOCH" "$flag" "$path" >> "$log"
 }
 
+# set_config <claude_dir> <key> <value>
+# Appends a "key=value" line to <claude_dir>/cortex/config.local (spec §7.1
+# per-project config, creating the cortex dir + file as needed). Tests that
+# rely on the OLD hardcoded Undercurrent vocabulary (architectural_patterns,
+# docs_file, lessons_file, ...) must configure it explicitly via this helper
+# — the public plugin's defaults are empty/generic (see eio_config_get).
+set_config() {
+  local claude_dir="$1" key="$2" val="$3"
+  mkdir -p "$claude_dir/cortex"
+  printf '%s=%s\n' "$key" "$val" >> "$claude_dir/cortex/config.local"
+}
+
 # create_state_file <dir> <session_id> [overrides...]
 # Creates a well-formed state file. Overrides: "field=value" pairs.
 # Returns the file path.
