@@ -54,20 +54,33 @@ if [ -n "$test_files" ]; then
   exit 0
 fi
 
-# No test files this session — enforce based on profile
+# No test files this session — enforce based on profile. Locked D5:
+# standard/minimal are unverifiable (no way to confirm the "right" test was
+# written, only that *a* test file was touched) so they demote to a
+# once-per-session reminder; strict keeps today's deny on EVERY unprotected
+# src edit (strict users opted into the friction).
 profile=$(eio_get_profile)
 case "$profile" in
-  minimal)
-    printf '{}'
-    ;;
   strict)
     msg=$(escape_for_json "TDD enforcement: no test file created/edited this session. Write a failing test before editing production code.")
     printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"},"systemMessage":"%s"}' "$msg"
     ;;
   *)
-    # standard — warn but allow
-    msg=$(escape_for_json "TDD guard: editing production code without a test file this session. Consider writing a failing test first (RED phase).")
-    printf '{"systemMessage":"%s"}' "$msg"
+    # standard or minimal — once-per-session reminder: fires only when the
+    # log has ZERO prior /src/ production file_edit events (i.e. THIS edit
+    # is the session's first). pre-dispatch runs before post-edit-dispatch
+    # appends the current edit's own event, so the log at check time reflects
+    # only prior edits. Errexit-safe grep -q under a plain if.
+    prior_src_edits=""
+    if list_events file_edit | sed 's/^[rx] //' | grep -qiE '/src/'; then
+      prior_src_edits="yes"
+    fi
+    if [ -z "$prior_src_edits" ]; then
+      msg=$(escape_for_json "TDD guard: editing production code without a test file this session. Consider writing a failing test first (RED phase).")
+      printf '{"systemMessage":"%s"}' "$msg"
+    else
+      printf '{}'
+    fi
     ;;
 esac
 exit 0

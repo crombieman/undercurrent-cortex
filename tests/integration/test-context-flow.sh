@@ -169,4 +169,76 @@ result=$(run_context_flow_with_events "fix the login bug" "ctx-cautious-reason" 
   "1700000001|mode_set|cautious high-churn")
 assert_contains "cautious_mode_first_token_extraction" "$result" "Cautious mode active"
 
+# Test 26: cautious injection fires ONCE per session — a second cautious-
+# eligible prompt in the same session stays silent because the first firing
+# appended `intervention cautious_mode` (spec §3.3 vocabulary), and the guard
+# checks that event's presence rather than a keyword list (R4: the old
+# keyword list — edit|fix|add|implement|build|refactor|change|update — is
+# deleted entirely; ANY prompt is now cautious-eligible on the session's
+# first opportunity).
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "ctx-cautious-once" \
+  "1700000001|mode_set|cautious")
+json1=$(mock_json "user_prompt=hello there" "session_id=ctx-cautious-once")
+result1=$(echo "$json1" | bash "$SANDBOX/hooks/scripts/context-flow.sh" 2>/dev/null || true)
+json2=$(mock_json "user_prompt=implement the new feature" "session_id=ctx-cautious-once")
+result2=$(echo "$json2" | bash "$SANDBOX/hooks/scripts/context-flow.sh" 2>/dev/null || true)
+assert_contains "cautious_fires_once_first_call" "$result1" "Cautious mode active"
+assert_not_contains "cautious_fires_once_second_call_silent" "$result2" "Cautious mode active"
+intervention_count=$(count_events intervention cautious_mode '' "$LOG")
+assert_eq "cautious_intervention_appended_exactly_once" "1" "$intervention_count"
+
+# Test 26b: the once-per-session gate is content-independent — a SECOND
+# cautious-eligible prompt stays silent even when it contains "additional"/
+# "fixture" (the substrings the old keyword list falsely matched on "add"/
+# "fix" — R4). Proves the fix isn't just "these two words are special-cased"
+# but that no prompt re-fires once the session's one opportunity is spent.
+setup_test
+result=$(run_context_flow_with_events "additional context here" "ctx-cautious-collision" \
+  "1700000001|mode_set|cautious" \
+  "1700000002|intervention|cautious_mode")
+assert_not_contains "collision_additional_no_retrigger" "$result" "Cautious mode active"
+result=$(run_context_flow_with_events "fixture setup" "ctx-cautious-collision2" \
+  "1700000001|mode_set|cautious" \
+  "1700000002|intervention|cautious_mode")
+assert_not_contains "collision_fixture_no_retrigger" "$result" "Cautious mode active"
+
+# --- R4 collision fixes: cautious keyword-list deleted, wrap-up trigger narrowed ---
+
+# Test 27: "additional context here" triggers NOTHING in a normal (non-
+# cautious) session — general inertness check, same pattern as the
+# no_chan/no_gin/no_rust/no_borrow collision tests above (old keyword list
+# matched "add" as a substring of "additional" — R4).
+setup_test
+result=$(run_context_flow "additional context here")
+assert_eq "collision_additional_triggers_nothing" "{}" "$result"
+
+# Test 28: "fixture setup" triggers NOTHING in a normal session (old keyword
+# list matched "fix" as a substring of "fixture" — R4).
+setup_test
+result=$(run_context_flow "fixture setup")
+assert_eq "collision_fixture_triggers_nothing" "{}" "$result"
+
+# Test 29: "call it with these args" does NOT trigger the wrap-up reminder —
+# narrowed from the bare "call it" substring to
+# "call it a day|call it a night|calling it".
+setup_test
+result=$(run_context_flow "call it with these args")
+assert_eq "collision_call_it_with_args_triggers_nothing" "{}" "$result"
+
+# Test 30: "call it a day" still triggers the wrap-up reminder
+setup_test
+result=$(run_context_flow "let's call it a day")
+assert_contains "wrapup_call_it_a_day" "$result" "session-end"
+
+# Test 31: "call it a night" still triggers the wrap-up reminder
+setup_test
+result=$(run_context_flow "going to call it a night")
+assert_contains "wrapup_call_it_a_night" "$result" "session-end"
+
+# Test 32: "calling it" still triggers the wrap-up reminder
+setup_test
+result=$(run_context_flow "I'm calling it for today")
+assert_contains "wrapup_calling_it" "$result" "session-end"
+
 end_suite

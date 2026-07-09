@@ -5,6 +5,9 @@ TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$TESTS_DIR/lib/test-framework.sh"
 source "$TESTS_DIR/lib/fixtures.sh"
 
+PLUGIN_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
+source "$PLUGIN_ROOT/hooks/scripts/lib/event-io.sh"
+
 begin_suite "plan-file-guard"
 
 # Create sandbox once for the suite
@@ -80,5 +83,76 @@ json=$(mock_json "tool_name=Write" \
   "tool_input.content=Overwrite")
 result=$(run_plan_guard "$json")
 assert_contains "handle_relative_plan_path" "$result" "deny"
+
+# --- Deny-once escape hatch (spec §3.3 vocabulary: plan_guard_denied) ---
+
+# Test 6: First deny on a path appends a plan_guard_denied event for that path
+setup_test
+plan_file="$_TEST_TMPDIR/.claude/plans/escape-plan.md"
+mkdir -p "$_TEST_TMPDIR/.claude/plans"
+for i in $(seq 1 60); do
+  echo "Line $i of the existing plan" >> "$plan_file"
+done
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "pfg-test")
+json=$(mock_json "tool_name=Write" "session_id=pfg-test" \
+  "tool_input.file_path=$plan_file" \
+  "tool_input.content=Overwritten content")
+result=$(run_plan_guard "$json")
+assert_contains "first_deny_still_blocks" "$result" "deny"
+denied_value=$(last_event plan_guard_denied "$LOG")
+assert_eq "first_deny_appends_plan_guard_denied_event" "$plan_file" "$denied_value"
+
+# Test 7: Second Write attempt on the SAME path in the SAME session is
+# ALLOWED — the deny-once escape hatch (a plan_guard_denied event for this
+# exact path already exists in the session log).
+setup_test
+plan_file="$_TEST_TMPDIR/.claude/plans/escape-plan2.md"
+mkdir -p "$_TEST_TMPDIR/.claude/plans"
+for i in $(seq 1 60); do
+  echo "Line $i of the existing plan" >> "$plan_file"
+done
+create_event_log "$_TEST_TMPDIR/.claude" "pfg-escape" \
+  "1700000001|plan_guard_denied|${plan_file}" > /dev/null
+json=$(mock_json "tool_name=Write" "session_id=pfg-escape" \
+  "tool_input.file_path=$plan_file" \
+  "tool_input.content=Overwritten again, this time on purpose")
+result=$(run_plan_guard "$json")
+assert_eq "second_write_same_path_allowed" "{}" "$result"
+
+# Test 8: A plan_guard_denied event for a DIFFERENT path does not unlock this
+# one — still denies (and appends its own plan_guard_denied event).
+setup_test
+plan_file_a="$_TEST_TMPDIR/.claude/plans/escape-plan-a.md"
+plan_file_b="$_TEST_TMPDIR/.claude/plans/escape-plan-b.md"
+mkdir -p "$_TEST_TMPDIR/.claude/plans"
+for i in $(seq 1 60); do
+  echo "Line $i" >> "$plan_file_b"
+done
+create_event_log "$_TEST_TMPDIR/.claude" "pfg-diffpath" \
+  "1700000001|plan_guard_denied|${plan_file_a}" > /dev/null
+json=$(mock_json "tool_name=Write" "session_id=pfg-diffpath" \
+  "tool_input.file_path=$plan_file_b" \
+  "tool_input.content=Overwritten content")
+result=$(run_plan_guard "$json")
+assert_contains "different_path_prior_denial_does_not_unlock" "$result" "deny"
+
+# Test 9: No resolvable event log (session_id present but no log on disk) —
+# deny-once semantics degrade to always-deny (pre-v4 behavior, unchanged).
+setup_test
+plan_file="$_TEST_TMPDIR/.claude/plans/escape-plan-nolog.md"
+mkdir -p "$_TEST_TMPDIR/.claude/plans"
+for i in $(seq 1 60); do
+  echo "Line $i" >> "$plan_file"
+done
+json=$(mock_json "tool_name=Write" "session_id=pfg-nolog" \
+  "tool_input.file_path=$plan_file" \
+  "tool_input.content=Overwritten content")
+result=$(run_plan_guard "$json")
+assert_contains "no_event_log_always_denies" "$result" "deny"
+json2=$(mock_json "tool_name=Write" "session_id=pfg-nolog" \
+  "tool_input.file_path=$plan_file" \
+  "tool_input.content=Overwritten content again")
+result2=$(run_plan_guard "$json2")
+assert_contains "no_event_log_always_denies_repeat" "$result2" "deny"
 
 end_suite

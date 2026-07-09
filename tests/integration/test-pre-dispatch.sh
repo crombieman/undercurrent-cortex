@@ -168,6 +168,47 @@ json=$(mock_json "tool_name=Write" "session_id=pd-test" \
 result=$(run_pre_dispatch "$json")
 assert_eq "tdd_guard_skips_non_src_paths" "{}" "$result"
 
+# Test 15b: TDD guard now reminds under the minimal profile too (previously
+# fully silent — locked D5: standard/minimal both get a once-per-session
+# reminder now, only strict keeps deny).
+setup_test
+create_event_log "$_TEST_TMPDIR/.claude" "pd-test" > /dev/null
+json=$(mock_json "tool_name=Write" "session_id=pd-test" \
+  "tool_input.file_path=${_TEST_TMPDIR}/src/lib/foo.ts" \
+  "tool_input.content=export const foo = 1;")
+export CORTEX_PROFILE=minimal
+result=$(run_pre_dispatch "$json")
+unset CORTEX_PROFILE
+assert_contains "tdd_guard_minimal_now_reminds" "$result" "TDD guard"
+
+# Test 15c: TDD guard reminder fires ONCE per session — a second
+# production-src edit in a session that already has a prior r-flagged /src/
+# file_edit event stays silent (standard profile). The prior edit is seeded
+# directly since pre-dispatch (PreToolUse) runs before post-edit-dispatch
+# (PostToolUse) appends the CURRENT edit's own file_edit event.
+setup_test
+create_event_log "$_TEST_TMPDIR/.claude" "pd-test" \
+  "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/foo.ts" > /dev/null
+json=$(mock_json "tool_name=Write" "session_id=pd-test" \
+  "tool_input.file_path=${_TEST_TMPDIR}/src/lib/bar.ts" \
+  "tool_input.content=export const bar = 1;")
+result=$(run_pre_dispatch "$json")
+assert_eq "tdd_guard_reminder_fires_once_per_session" "{}" "$result"
+
+# Test 15d: TDD guard STRICT profile denies on EVERY unprotected src edit,
+# not just the first (locked decision — strict users opted into friction;
+# only standard/minimal get the once-per-session reminder treatment).
+setup_test
+create_event_log "$_TEST_TMPDIR/.claude" "pd-test" \
+  "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/foo.ts" > /dev/null
+json=$(mock_json "tool_name=Write" "session_id=pd-test" \
+  "tool_input.file_path=${_TEST_TMPDIR}/src/lib/bar.ts" \
+  "tool_input.content=export const bar = 1;")
+export CORTEX_PROFILE=strict
+result=$(run_pre_dispatch "$json")
+unset CORTEX_PROFILE
+assert_contains "tdd_guard_strict_denies_every_edit" "$result" "deny"
+
 # Test 16: Missing event log (session_id present, no log file on disk) still
 # routes to sub-handlers — routing is the dispatcher's job regardless of state.
 # Mirrors test-post-dispatch.sh's missing_event_log_still_routes_to_handlers.

@@ -69,15 +69,23 @@ PROMPT_LOWER=$(printf '%s' "$PROMPT" | tr '[:upper:]' '[:lower:]')
 PADDED=" ${PROMPT_LOWER} "
 
 # --- Feedback Loop: cautious-mode injection ---
+# R4 fix: the old keyword list (edit|fix|add|implement|build|refactor|change|
+# update) collided with ordinary English substrings ("additional", "fixture")
+# and re-fired on every matching prompt all session long. Replaced with a
+# once-per-session trigger: fires on the FIRST prompt of a cautious session,
+# regardless of content, then never again (guarded by the `intervention
+# cautious_mode` event — spec §3.3 closed vocabulary — appended at each actual
+# point of injection below, not here, so a prompt that matches an earlier
+# early-return branch and never surfaces CAUTIOUS_MSG doesn't burn the
+# session's one opportunity).
 CAUTIOUS_MSG=""
 mode=$(last_event mode_set)
 mode="${mode%% *}"
 mode="${mode:-normal}"
 if [ "$mode" = "cautious" ]; then
-  if [[ "$PROMPT_LOWER" == *"edit"* ]] || [[ "$PROMPT_LOWER" == *"fix"* ]] \
-     || [[ "$PROMPT_LOWER" == *"add"* ]] || [[ "$PROMPT_LOWER" == *"implement"* ]] \
-     || [[ "$PROMPT_LOWER" == *"build"* ]] || [[ "$PROMPT_LOWER" == *"refactor"* ]] \
-     || [[ "$PROMPT_LOWER" == *"change"* ]] || [[ "$PROMPT_LOWER" == *"update"* ]]; then
+  cautious_fired=$(count_events intervention cautious_mode)
+  cautious_fired="${cautious_fired:-0}"
+  if [ "$cautious_fired" -eq 0 ]; then
     CAUTIOUS_MSG="[Cautious mode active — health trend degrading or high-churn detected. Plan before acting. Enter plan mode for non-trivial changes.]"
   fi
 fi
@@ -192,7 +200,8 @@ elif [[ "$PROFILE" = "strict" ]] && { [[ "$PROMPT_LOWER" == *"show proposals"* ]
 
 elif [[ "$PROMPT_LOWER" == *"done for today"* ]] || [[ "$PROMPT_LOWER" == *"wrap up"* ]] \
      || [[ "$PROMPT_LOWER" == *"session end"* ]] || [[ "$PROMPT_LOWER" == *"let's stop"* ]] \
-     || [[ "$PROMPT_LOWER" == *"call it"* ]]; then
+     || [[ "$PROMPT_LOWER" == *"call it a day"* ]] || [[ "$PROMPT_LOWER" == *"call it a night"* ]] \
+     || [[ "$PROMPT_LOWER" == *"calling it"* ]]; then
   MSG="Remember to invoke the session-end skill before closing. Run: /cortex:session-end"
   ESCAPED=$(escape_for_json "$MSG")
   printf '{"systemMessage":"%s"}' "$ESCAPED"
@@ -203,6 +212,7 @@ fi
 if [ -z "$CONTEXT_FILE" ] || [ ! -f "$CONTEXT_FILE" ]; then
   # Still inject cautious-mode warning if active
   if [ -n "$CAUTIOUS_MSG" ]; then
+    append_event "intervention" "cautious_mode"
     ESCAPED=$(escape_for_json "$CAUTIOUS_MSG")
     printf '{"systemMessage":"%s"}' "$ESCAPED"
     exit 0
@@ -215,6 +225,7 @@ fi
 CONTENT=$(cat "$CONTEXT_FILE" 2>/dev/null) || true
 if [ -z "$CONTENT" ]; then
   if [ -n "$CAUTIOUS_MSG" ]; then
+    append_event "intervention" "cautious_mode"
     ESCAPED=$(escape_for_json "$CAUTIOUS_MSG")
     printf '{"systemMessage":"%s"}' "$ESCAPED"
     exit 0
@@ -225,6 +236,7 @@ fi
 
 # Prepend cautious-mode warning if active
 if [ -n "$CAUTIOUS_MSG" ]; then
+  append_event "intervention" "cautious_mode"
   CONTENT="${CAUTIOUS_MSG}"$'\n\n'"${CONTENT}"
 fi
 

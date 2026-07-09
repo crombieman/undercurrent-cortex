@@ -78,6 +78,11 @@ result=$(run_stop_gate_in "$GITDIR" "selfheal")
 assert_eq "git_status_self_heal_clears_false_positive" "{}" "$result"
 
 # --- Gates 2 & 3: docs / tests, only fire when file_count > 3 ---
+# Gate 2 (docs) is DEMOTED to a non-blocking reminder (locked D5): it never
+# emits decision:block on its own. Tests below append a trailing commit event
+# after the seeded edits so Gate 1 (uncommitted) doesn't co-fire and confound
+# the "does this gate block" assertion — files_modified (Gate 2/3's unique-file
+# list) is unaffected by the commit anchor, only Gate 1's own counter is.
 
 # Test: Gate 2 is INACTIVE by default (no config.local) — spec §7.1: an
 # unconfigured project keeps Undercurrent-specific vocabulary out of the
@@ -92,9 +97,10 @@ seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/constants.ts"
 result=$(run_stop_gate "docs-gate-unconfigured")
 assert_not_contains "gate2_inactive_without_config" "$result" "documentation.md"
 
-# Test: block when docs_edit is absent and > 3 unique architectural files touched
-# — architectural_patterns configured explicitly (spec §7.1: reproduces the
-# old hardcoded Undercurrent vocabulary via config.local)
+# Test: Gate 2 demotes to a reminder — docs_edit absent, > 3 unique
+# architectural files touched (architectural_patterns configured explicitly,
+# spec §7.1), no other gate active: approves with a systemMessage reminder,
+# never blocks.
 setup_test
 set_config "$_TEST_TMPDIR/.claude" "architectural_patterns" "scoring|pipeline|v10|v11|constants|middleware|cached-loader|signals"
 LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "docs-gate")
@@ -102,10 +108,18 @@ seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/scoring/engine.ts"
 seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/scoring/v11.ts"
 seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/utils.ts"
 seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/constants.ts"
+echo "1700000100|commit|abc1234 feat: land the scoring changes" >> "$LOG"
 result=$(run_stop_gate "docs-gate")
-assert_contains "block_docs_not_updated" "$result" "documentation.md"
+assert_not_contains "gate2_reminder_does_not_block" "$result" "\"decision\":\"block\""
+assert_contains "gate2_reminder_text" "$result" "documentation.md not updated after architectural changes"
+assert_contains "gate2_reminder_systemMessage_prefix" "$result" "Reminders: "
+approved=$(last_event stop_approved "$LOG")
+assert_eq "gate2_reminder_appends_stop_approved" "true" "$approved"
+blocked_after=$(count_events stop_blocked '' '' "$LOG")
+assert_eq "gate2_reminder_does_not_append_stop_blocked" "0" "$blocked_after"
 
-# Test: Gate 2's docs-file text honors a custom docs_file config value
+# Test: Gate 2's reminder text honors a custom docs_file config value, still
+# non-blocking.
 setup_test
 set_config "$_TEST_TMPDIR/.claude" "architectural_patterns" "scoring"
 set_config "$_TEST_TMPDIR/.claude" "docs_file" "ARCHITECTURE.md"
@@ -114,28 +128,96 @@ seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/scoring/engine.ts"
 seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/utils.ts"
 seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/constants.ts"
 seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/other.ts"
+echo "1700000100|commit|abc1234 feat: land it" >> "$LOG"
 result=$(run_stop_gate "docs-gate-custom")
+assert_not_contains "gate2_custom_docs_file_does_not_block" "$result" "\"decision\":\"block\""
 assert_contains "gate2_custom_docs_file_text" "$result" "ARCHITECTURE.md"
 assert_not_contains "gate2_custom_docs_file_no_default_text" "$result" "documentation.md not updated"
 
-# Test: block when test_run is absent and > 3 unique .ts files touched
+# Test: Gate 3 demotes to a reminder when no test ecosystem is detectable this
+# session (no test-pattern file among the edits, no language marker file at
+# the project root, no config test_command) — locked D5: verified-blocking
+# only when a test ecosystem is actually detectable.
 setup_test
-LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "tests-gate")
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "tests-gate-undetected")
 seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/utils.ts"
 seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/scoring.ts"
 seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/constants.ts"
 seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/pipeline.ts"
-result=$(run_stop_gate "tests-gate")
-assert_contains "block_tests_not_run" "$result" "Tests not run"
+echo "1700000100|commit|abc1234 feat: land it" >> "$LOG"
+result=$(run_stop_gate "tests-gate-undetected")
+assert_not_contains "gate3_no_ecosystem_does_not_block" "$result" "\"decision\":\"block\""
+assert_contains "gate3_no_ecosystem_reminder_text" "$result" "Tests not run after modifying source files"
 
-# Test: docs gate skipped when unique file_count <= 3, even with a scoring path
-# and no docs_edit event (avoid nagging on quick fixes)
+# Test: Gate 3 BLOCKS (verified) when a language marker file (package.json)
+# is present at the project root — a detectable test ecosystem — and no
+# test_run event exists this session. Language-neutral reason text (no more
+# TypeScript-only wording/regex).
+setup_test
+touch "$_TEST_TMPDIR/package.json"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "tests-gate-marker")
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/utils.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/scoring.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/constants.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/pipeline.ts"
+echo "1700000100|commit|abc1234 feat: land it" >> "$LOG"
+result=$(run_stop_gate "tests-gate-marker")
+rm -f "$_TEST_TMPDIR/package.json"
+assert_contains "gate3_blocks_via_language_marker" "$result" "\"decision\":\"block\""
+assert_contains "gate3_blocks_language_neutral_text" "$result" "Tests not run after modifying source files"
+
+# Test: Gate 3 BLOCKS via a test-file-pattern match among the session's edits
+# (no marker file, no config — an edited path itself looks like a test file
+# that was never actually run).
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "tests-gate-pattern")
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/utils.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/scoring.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/constants.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/utils.test.ts"
+echo "1700000100|commit|abc1234 feat: land it" >> "$LOG"
+result=$(run_stop_gate "tests-gate-pattern")
+assert_contains "gate3_blocks_via_test_file_pattern" "$result" "\"decision\":\"block\""
+
+# Test: Gate 3 BLOCKS via a configured test_command marker (no other
+# ecosystem signal present).
+setup_test
+set_config "$_TEST_TMPDIR/.claude" "test_command" "make test"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "tests-gate-config")
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/utils.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/scoring.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/constants.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/pipeline.ts"
+echo "1700000100|commit|abc1234 feat: land it" >> "$LOG"
+result=$(run_stop_gate "tests-gate-config")
+assert_contains "gate3_blocks_via_config_test_command" "$result" "\"decision\":\"block\""
+
+# Test: docs/tests gates skipped when unique file_count <= 3, even with a
+# scoring path and no docs_edit event (avoid nagging on quick fixes)
 setup_test
 LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "low-edits")
 seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/lib/scoring/engine.ts"
 result=$(run_stop_gate "low-edits")
 assert_not_contains "skip_docs_gate_low_edits" "$result" "documentation.md"
 assert_contains "skip_docs_gate_low_edits_still_blocks_uncommitted" "$result" "Uncommitted changes"
+
+# Test: mixed session — Gate 1 (uncommitted) blocks while Gate 7 (decisions)
+# is independently reminder-eligible. The block JSON's reason gets a
+# "Reminders (non-blocking):" tail, and the appended stop_blocked event value
+# lists ONLY the blocking gate name ("uncommitted"), never the reminder gate.
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "mixed-block-reminder" \
+  "1700000001|plan_mode|used" \
+  "1700000002|file_edit|r ${_TEST_TMPDIR}/src/lib/before.ts" \
+  "1700000003|commit|abc1234 feat: bar" \
+  "1700000004|file_edit|r ${_TEST_TMPDIR}/src/lib/after.ts")
+result=$(run_stop_gate "mixed-block-reminder")
+assert_contains "mixed_block_reminder_decision_blocks" "$result" "\"decision\":\"block\""
+assert_contains "mixed_block_reminder_reason_has_uncommitted" "$result" "Uncommitted changes"
+assert_contains "mixed_block_reminder_reason_has_reminder_tail" "$result" "Reminders (non-blocking):"
+assert_contains "mixed_block_reminder_reason_has_decisions_reminder" "$result" "Decisions not captured"
+blocked_value=$(last_event stop_blocked "$LOG")
+assert_eq "stop_blocked_value_excludes_reminder_gates" "uncommitted" "$blocked_value"
 
 # --- Gate 4: carry-over items not addressed ---
 
@@ -178,21 +260,28 @@ result=$(run_stop_gate "stale-carry")
 assert_contains "block_stale_carry_over" "$result" "Stale carry-over"
 
 # --- Gate 6: root cause documentation after fix: commits ---
+# Demoted to a non-blocking reminder (locked D5) — a fix: commit with no
+# root_cause_logged event now approves with a systemMessage, never blocks.
 
-# Test: block when a fix: commit landed this session and no root_cause_logged event exists
+# Test: Gate 6 demotes to a reminder — fix: commit landed this session, no
+# root_cause_logged event exists, standard profile.
 setup_test
 GITDIR="$_TEST_TMPDIR/git-rootcause"
 init_git_repo "$GITDIR"
 echo "x" > "$GITDIR/f.txt"
 git -C "$GITDIR" add -A
 git -C "$GITDIR" commit -q -m "fix: something broke"
-create_event_log "$GITDIR/.claude" "rootcause" \
-  "1700000001|commit|abc1234 fix: something broke" > /dev/null
+LOG=$(create_event_log "$GITDIR/.claude" "rootcause" \
+  "1700000001|commit|abc1234 fix: something broke")
 result=$(run_stop_gate_in "$GITDIR" "rootcause")
-assert_contains "block_root_cause_not_documented" "$result" "Root cause not documented"
-assert_contains "block_root_cause_default_lessons_file_text" "$result" "tasks/lessons.md"
+assert_not_contains "root_cause_reminder_does_not_block" "$result" "\"decision\":\"block\""
+assert_contains "root_cause_reminder_text" "$result" "Root cause not documented"
+assert_contains "root_cause_reminder_default_lessons_file_text" "$result" "tasks/lessons.md"
+approved=$(last_event stop_approved "$LOG")
+assert_eq "root_cause_reminder_appends_stop_approved" "true" "$approved"
 
-# Test: Gate 6's reason text honors a custom lessons_file config value
+# Test: Gate 6's reminder text honors a custom lessons_file config value,
+# still non-blocking.
 setup_test
 GITDIR="$_TEST_TMPDIR/git-rootcause-custom"
 init_git_repo "$GITDIR"
@@ -203,6 +292,7 @@ set_config "$GITDIR/.claude" "lessons_file" "docs/CHANGELOG.md"
 create_event_log "$GITDIR/.claude" "rootcause-custom" \
   "1700000001|commit|abc1234 fix: something broke" > /dev/null
 result=$(run_stop_gate_in "$GITDIR" "rootcause-custom")
+assert_not_contains "gate6_custom_lessons_file_does_not_block" "$result" "\"decision\":\"block\""
 assert_contains "gate6_custom_lessons_file_text" "$result" "docs/CHANGELOG.md"
 assert_not_contains "gate6_custom_lessons_file_no_default_text" "$result" "tasks/lessons.md"
 
@@ -221,14 +311,19 @@ result=$(run_stop_gate_in "$GITDIR" "rootcause-min")
 assert_eq "root_cause_gate_exempt_under_minimal_profile" "{}" "$result"
 
 # --- Gate 7: decisions captured after plan-mode session ---
+# Demoted to a non-blocking reminder (locked D5).
 
-# Test: block when plan_mode was used, a commit landed, but no decision_logged event
+# Test: Gate 7 demotes to a reminder — plan_mode was used, a commit landed,
+# but no decision_logged event exists.
 setup_test
-create_event_log "$_TEST_TMPDIR/.claude" "decisions-gate" \
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "decisions-gate" \
   "1700000001|plan_mode|used" \
-  "1700000002|commit|abc1234 feat: something" > /dev/null
+  "1700000002|commit|abc1234 feat: something")
 result=$(run_stop_gate "decisions-gate")
-assert_contains "block_decisions_not_captured" "$result" "Decisions not captured"
+assert_not_contains "gate7_reminder_does_not_block" "$result" "\"decision\":\"block\""
+assert_contains "gate7_reminder_text" "$result" "Decisions not captured"
+approved=$(last_event stop_approved "$LOG")
+assert_eq "gate7_reminder_appends_stop_approved" "true" "$approved"
 
 # --- Escape hatch: consecutive stop_blocked events since last approve/force ---
 

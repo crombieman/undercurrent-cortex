@@ -70,6 +70,7 @@ fi
 # --- GATE CHECKS ---
 failures=""
 blocked_gates=""
+reminders=""
 
 # add_failure <gate_name> <reason_line> — accumulates both the human-readable
 # reason text (for the block JSON) and the short gate-name list (for the
@@ -77,6 +78,18 @@ blocked_gates=""
 add_failure() {
   failures="${failures}- ${2}\n"
   blocked_gates="${blocked_gates:+${blocked_gates},}${1}"
+}
+
+# add_reminder <gate_name> <reason_line> — parallel accumulator for demoted
+# gates (locked D5: Gates 2/6/7 verify nothing block-worthy — docs/root-cause/
+# decisions capture can't be checked for correctness, only touched — so they
+# ride the approve path as a non-blocking systemMessage instead of
+# decision:block). Text is the gate's OLD reason line verbatim, no "Reminder:"
+# prefix or other block framing. <gate_name> is accepted for call-signature
+# symmetry with add_failure but isn't otherwise tracked — reminders never
+# feed the stop_blocked event value (blocked_gates stays failure-only).
+add_reminder() {
+  reminders="${reminders}- ${2}\n"
 }
 
 # Gate 1: Uncommitted changes
@@ -120,15 +133,36 @@ if [ "$file_count" -gt 3 ]; then
     arch_patterns=$(eio_config_get architectural_patterns)
     if [ -n "$arch_patterns" ] && echo "$files_modified" | grep -qiE "$arch_patterns"; then
       docs_file=$(eio_config_get docs_file "documentation.md")
-      add_failure "docs" "${docs_file} not updated after architectural changes"
+      add_reminder "docs" "${docs_file} not updated after architectural changes"
     fi
   fi
 
-  # Gate 3: Tests not run after modifying TypeScript files
+  # Gate 3: Tests not run after modifying source files (language-neutral,
+  # locked D5: verified-blocking when a test ecosystem is detectable this
+  # session, else demotes to reminder — replaces the old TypeScript-only
+  # `.ts`/`.tsx` regex, which falsely implied test-running was a TS-specific
+  # obligation). Detection order: (b) an edited path already looks like a
+  # test file, (c) a project language/test marker file exists at the project
+  # root, (d) a per-project test_command override is configured. The
+  # >3-unique-files threshold above is the noise guard; this check itself
+  # stays a plain whole-session `count_events test_run` (no after-anchor).
   tests_run_count=$(count_events test_run)
   if [ "$tests_run_count" -eq 0 ]; then
-    if echo "$files_modified" | grep -qiE '\.(ts|tsx)$'; then
-      add_failure "tests" "Tests not run after modifying TypeScript files"
+    ecosystem_detected=false
+    if echo "$files_modified" | grep -qiE '\.(test|spec)\.(ts|tsx|js|jsx)$|__tests__/|_test\.(go|py|rs)$|test_.*\.py$'; then
+      ecosystem_detected=true
+    elif [ -f "${PROJECT_DIR}/package.json" ] || [ -f "${PROJECT_DIR}/go.mod" ] \
+         || [ -f "${PROJECT_DIR}/Cargo.toml" ] || [ -f "${PROJECT_DIR}/pyproject.toml" ] \
+         || [ -f "${PROJECT_DIR}/setup.py" ]; then
+      ecosystem_detected=true
+    elif [ -n "$(eio_config_get test_command)" ]; then
+      ecosystem_detected=true
+    fi
+
+    if [ "$ecosystem_detected" = true ]; then
+      add_failure "tests" "Tests not run after modifying source files"
+    else
+      add_reminder "tests" "Tests not run after modifying source files"
     fi
   fi
 fi
@@ -156,7 +190,7 @@ plan_mode_used_count=$(count_events plan_mode)
 decisions_logged_count=$(count_events decision_logged)
 commits_for_g7=$(count_events commit)
 if [ "$plan_mode_used_count" -gt 0 ] && [ "$commits_for_g7" -gt 0 ] && [ "$decisions_logged_count" -eq 0 ]; then
-  add_failure "decisions" "Decisions not captured: plan-audit Gate 17 not run this session. Log decisions to .claude/cortex/decisions.local.md before stopping."
+  add_reminder "decisions" "Decisions not captured: plan-audit Gate 17 not run this session. Log decisions to .claude/cortex/decisions.local.md before stopping."
 fi
 
 # Gate 6: Root cause documentation for fix: commits
@@ -179,7 +213,7 @@ if [ "$commits_count_g6" -gt 0 ]; then
         minimal) ;; # no enforcement
         *)
           lessons_file=$(eio_config_get lessons_file "tasks/lessons.md")
-          add_failure "root_cause" "Root cause not documented after fix: commit. Update ${lessons_file} with pattern + prevention rule."
+          add_reminder "root_cause" "Root cause not documented after fix: commit. Update ${lessons_file} with pattern + prevention rule."
           ;;
       esac
     fi
@@ -191,12 +225,23 @@ if [ -n "$failures" ]; then
   append_event "stop_blocked" "$blocked_gates"
   [ "${CORTEX_DEBUG:-}" = "true" ] && echo "stop-gate: BLOCKED — gates: ${blocked_gates}" >&2
 
-  reason=$(escape_for_json "Stop blocked. Address obligations above, then stop again to override.\nUnmet gates:\n${failures}")
+  reason_text="Stop blocked. Address obligations above, then stop again to override.\nUnmet gates:\n${failures}"
+  if [ -n "$reminders" ]; then
+    reason_text="${reason_text}\nReminders (non-blocking):\n${reminders}"
+  fi
+  reason=$(escape_for_json "$reason_text")
   printf '{"decision":"block","reason":"%s"}' "$reason"
   exit 0
 fi
 
-# All gates pass → approve
+# All blocking gates pass → approve. Reminders (if any) ride along as a
+# non-blocking systemMessage — spec locked D5: demoted gates never emit
+# decision:block, even alone.
 append_event "stop_approved" "true"
-printf '{}'
+if [ -n "$reminders" ]; then
+  msg=$(escape_for_json "Reminders: ${reminders}")
+  printf '{"systemMessage":"%s"}' "$msg"
+else
+  printf '{}'
+fi
 exit 0
