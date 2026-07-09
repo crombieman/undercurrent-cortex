@@ -10,6 +10,7 @@ PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # Deferred below until AFTER the opt-in gate passes, so a genuinely un-opted
 # repo gets ZERO directory creation from sourcing alone (spec §4.3).
 source "$SCRIPT_DIR/scripts/lib/event-io.sh" || { printf '{}'; exit 0; }
+source "$SCRIPT_DIR/scripts/lib/health-trend.sh" || { printf '{}'; exit 0; }
 
 # Buffer stdin to extract session_id
 HOOK_INPUT=$(cat)
@@ -296,93 +297,24 @@ if [[ -n "$yesterday" ]]; then
   fi
 fi
 
-# --- Step 4: Operational intelligence (health trends) ---
-health_warning=""
-if [ -f "$HEALTH_FILE" ]; then
-  # Read pre-computed rolling averages from header
-  # `|| true` inside each substitution: grep exits 1 when the header line is
-  # absent (header-only or partial health file); under pipefail that would kill
-  # the hook. Empty result falls back to the ${:-default} at the use site.
-  h_avg_rm=$(grep '^avg_reasoning_misses=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r' || true)
-  h_avg_epc=$(grep '^avg_edits_per_commit=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r' || true)
-  h_trend=$(grep '^trend_direction=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r' || true)
-  h_data_count=0
-  if grep -v '^#' "$HEALTH_FILE" 2>/dev/null | grep -v '^$' | grep -v '^trend_' | grep -v '^avg_' | grep -v '^---' | grep -q '|' 2>/dev/null; then
-    h_data_count=$(grep -v '^#' "$HEALTH_FILE" 2>/dev/null | grep -v '^$' | grep -v '^trend_' | grep -v '^avg_' | grep -v '^---' | grep -c '|')
-  fi
-  if [ "${h_data_count:-0}" -ge 1 ]; then
-    health_warning="Session health (last 10): ${h_avg_rm:-0.0} avg misses, ${h_avg_epc:-0.0} avg edits/commit, trend: ${h_trend:-stable}"
-  fi
-
-  # Read last 3 data lines (skip comments and blanks)
-  recent=$(grep -v '^#' "$HEALTH_FILE" 2>/dev/null | grep -v '^$' | grep '|' | tail -3 || echo "")
-  # Check for rising reasoning_misses (field 2, pipe-delimited)
-  if [ -n "$recent" ]; then
-    high_miss_count=$(echo "$recent" | awk -F'|' '$2 > 0 {c++} END {print c+0}' | tr -d ' \r')
-    if [ "${high_miss_count:-0}" -ge 2 ]; then
-      health_warning="${health_warning}"$'\n'"Health: reasoning-misses elevated in recent sessions. Review lessons before touching domain code."
-    fi
-  fi
-
-  # Trend direction check
-  trend=$(grep '^trend_direction=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r' || true)
-  if [ "$trend" = "degrading" ]; then
-    health_warning="${health_warning}"$'\n'"Health: DEGRADING trend detected. reasoning-misses increasing. Slow down and plan more carefully."
-  fi
-
-  # Commit granularity check
-  avg_epc=$(grep '^avg_edits_per_commit=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r' || true)
-  if [ -n "$avg_epc" ]; then
-    high_epc=$(awk "BEGIN { print ($avg_epc > 15.0) }")
-    if [ "$high_epc" = "1" ]; then
-      health_warning="${health_warning}"$'\n'"Health: avg edits/commit is ${avg_epc}. Commit more frequently — smaller, atomic commits."
-    fi
-  fi
-fi
-
-# --- Step 4b: Feedback Loop — compute behavioral flags ---
-# v3 wrote mode/commit_nudge_threshold into the state file; v4 records them as
-# events. mode_set value = "<mode> <reason>" (reason: trend|churn|boot) — the
-# first token is what context-flow reads. Same health-file heuristics as v3.
+# --- Step 4b: Feedback Loop — compute behavioral flags (v2: git-derived
+# medians only, spec §6.2). v3's Step 4 narrative health_warning block (avg
+# reasoning-misses / avg edits-per-commit / trend_direction header messaging)
+# and the churn/avg_epc-driven mode paths below it are GONE — those header
+# fields no longer exist (self-report demoted; trend is computed at READ time
+# from v2 rows via health-trend.sh, never stored). Cautious mode now triggers
+# ONLY from the fix_ratio/rework_files medians below; commit_nudge_threshold
+# has no v2 data source anymore, so it's a flat default.
 fb_mode="normal"
 fb_reason="boot"
 fb_commit_threshold=15
 
 if [ "$PROFILE" != "minimal" ] && [ -f "$HEALTH_FILE" ]; then
-  fb_trend=$(grep '^trend_direction=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r' || true)
-
-  # Trend-based mode
-  if [ "$fb_trend" = "degrading" ]; then
+  ht_result=$(ht_trend "$HEALTH_FILE")
+  IFS='|' read -r _ht_total _ht_nonidle ht_verdict ht_reason <<< "$ht_result"
+  if [ "$ht_verdict" = "degrading" ]; then
     fb_mode="cautious"
-    fb_reason="trend"
-  fi
-
-  # Topology-based mode: last 3 data rows all high-churn.
-  # `|| true`: the grep -v chain empties out (exit 1) on a header-only file; under
-  # pipefail the unguarded assignment would kill the hook. Empty => 0 rows below.
-  fb_data_rows=$(grep -v '^#' "$HEALTH_FILE" 2>/dev/null | grep -v '^$' | grep -v '^trend_' | grep -v '^avg_' | grep -v '^---' | grep '|' | tail -3 || true)
-  fb_row_count=0
-  if echo "$fb_data_rows" | grep -q '|' 2>/dev/null; then
-    fb_row_count=$(echo "$fb_data_rows" | grep -c '|')
-  fi
-  if [ "${fb_row_count:-0}" -ge 3 ]; then
-    fb_churn_count=$(echo "$fb_data_rows" | awk -F'|' '$11 == "high-churn" {c++} END {print c+0}')
-    if [ "${fb_churn_count:-0}" -ge 3 ]; then
-      fb_mode="cautious"
-      [ "$fb_reason" = "boot" ] && fb_reason="churn"
-    fi
-  fi
-
-  # Commit threshold adjustment
-  fb_avg_epc=$(grep '^avg_edits_per_commit=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r' || true)
-  if [ -n "$fb_avg_epc" ]; then
-    fb_high25=$(awk "BEGIN { print ($fb_avg_epc > 25.0) }" 2>/dev/null || echo "0")
-    fb_high15=$(awk "BEGIN { print ($fb_avg_epc > 15.0) }" 2>/dev/null || echo "0")
-    if [ "$fb_high25" = "1" ]; then
-      fb_commit_threshold=5
-    elif [ "$fb_high15" = "1" ]; then
-      fb_commit_threshold=8
-    fi
+    fb_reason="$ht_reason"
   fi
 fi
 
@@ -460,8 +392,14 @@ if [ "$PROFILE" != "minimal" ] && [ -f "$HEALTH_FILE" ]; then
   fi
 
   if [ "${social_row_count:-0}" -ge 3 ]; then
-    # Domain clustering (field 12, may be empty on old rows)
-    recent_domains=$(echo "$social_data" | awk -F'|' 'NF >= 12 && $12 != "" {print $12}')
+    # Domain clustering. Health rows are a MIX of v2 (field 13 = domain) and
+    # legacy (field 12 = domain_tag) shapes — a plain "$12" would silently
+    # read v2's `topology` field instead (bug introduced by the v2 schema
+    # change; fixed here by branching on the v2 sentinel, field 1).
+    recent_domains=$(echo "$social_data" | awk -F'|' '
+      $1 == "v2" && $13 != "" { print $13; next }
+      $1 != "v2" && NF >= 12 && $12 != "" { print $12 }
+    ')
     if [ -n "$recent_domains" ]; then
       top_domain_line=$(echo "$recent_domains" | sort | uniq -c | sort -rn | head -1 | sed 's/^[[:space:]]*//')
       domain_count=$(echo "$top_domain_line" | awk '{print $1}')
@@ -471,8 +409,12 @@ if [ "$PROFILE" != "minimal" ] && [ -f "$HEALTH_FILE" ]; then
       fi
     fi
 
-    # Session length trend
-    recent_durations=$(echo "$social_data" | awk -F'|' '{print $9}')
+    # Session length trend. duration_min is field 9 on legacy rows but field
+    # 10 on v2 rows — same v2-sentinel branch as above.
+    recent_durations=$(echo "$social_data" | awk -F'|' '
+      $1 == "v2" { print $10; next }
+      { print $9 }
+    ')
     if [ -n "$recent_durations" ]; then
       avg_dur=$(echo "$recent_durations" | awk '{s+=$1; c++} END {if(c>0) printf "%d", s/c; else print 0}')
       if [ "${avg_dur:-0}" -lt 5 ] && [ "${avg_dur:-0}" -gt 0 ]; then
@@ -520,7 +462,7 @@ Do NOT skip these. Do NOT defer. Complete before addressing user's message."
 fi
 
 # --- Output ---
-full_context="${statusline_output:+${statusline_output}$'\n\n'}${repair_report:+${repair_report}$'\n\n'}${synthesis_directive:+${synthesis_directive}$'\n\n'}${skill_content}${missed_close}${health_warning}${proposal_summary}${social_warnings:+$'\n\n'${social_warnings}}${sensory_output:+$'\n\n'Sensory scan:$'\n'${sensory_output}}${carry_over_msg}"
+full_context="${statusline_output:+${statusline_output}$'\n\n'}${repair_report:+${repair_report}$'\n\n'}${synthesis_directive:+${synthesis_directive}$'\n\n'}${skill_content}${missed_close}${proposal_summary}${social_warnings:+$'\n\n'${social_warnings}}${sensory_output:+$'\n\n'Sensory scan:$'\n'${sensory_output}}${carry_over_msg}"
 escaped=$(escape_for_json "$full_context")
 context="<cortex-session-start>${escaped}</cortex-session-start>"
 

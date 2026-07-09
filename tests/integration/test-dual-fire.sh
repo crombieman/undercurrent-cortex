@@ -204,12 +204,14 @@ json=$(mock_json "session_id=$SID")
 HEALTH_FILE="$PROJ/.claude/cortex/health.local.md"
 TODAY=$(date +%Y-%m-%d)
 
-# count_today_rows — grep -c both prints "0" AND exits non-zero on a no-match
-# file (the "0\n0" double-output gotcha documented in session-end-dispatch.sh);
-# guard with grep -q first, and treat a missing file as 0.
+# count_today_rows — v2 rows are prefixed "v2|<date>|..." (spec §6.1), not
+# date-first like the old v3 shape. grep -c both prints "0" AND exits
+# non-zero on a no-match file (the "0\n0" double-output gotcha documented in
+# session-end-dispatch.sh); guard with grep -q first, and treat a missing
+# file as 0.
 count_today_rows() {
-  if [ -f "$HEALTH_FILE" ] && grep -q "^${TODAY}|" "$HEALTH_FILE" 2>/dev/null; then
-    grep -c "^${TODAY}|" "$HEALTH_FILE" 2>/dev/null
+  if [ -f "$HEALTH_FILE" ] && grep -q "^v2|${TODAY}|" "$HEALTH_FILE" 2>/dev/null; then
+    grep -c "^v2|${TODAY}|" "$HEALTH_FILE" 2>/dev/null
   else
     echo 0
   fi

@@ -43,7 +43,41 @@ count_health_rows() {
   echo "$data_rows"
 }
 
-# --- Test 1: Creates health file with header ---
+# Helper: build a v2 row's value for a given field (1-indexed).
+v2_field() {
+  local health_file="$1" n="$2"
+  grep '^v2|' "$health_file" | head -1 | cut -d'|' -f"$n"
+}
+
+# --- Git sandbox helpers (rework_files / fix_ratio / reverts need REAL git
+# history at controlled dates — a mocked git can't exercise --since/--until
+# filtering). Mirrors tests/integration/test-post-bash-dispatch.sh's
+# make_commit pattern. ---
+make_git_project() {
+  local dir="$1"
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  git -C "$dir" init -q
+  git -C "$dir" config user.email "test@test.local"
+  git -C "$dir" config user.name "Cortex Test"
+}
+
+# commit_at <dir> <epoch> <message> <file...> — writes/appends to each file
+# then commits with author+committer date pinned to <epoch>.
+commit_at() {
+  local dir="$1" epoch="$2" message="$3"
+  shift 3
+  local f
+  for f in "$@"; do
+    mkdir -p "$(dirname "$dir/$f")"
+    echo "content ${epoch} ${RANDOM}" >> "$dir/$f"
+  done
+  git -C "$dir" add -A
+  GIT_AUTHOR_DATE="@${epoch}" GIT_COMMITTER_DATE="@${epoch}" \
+    git -C "$dir" commit -q -m "$message"
+}
+
+# --- Test 1: Creates health file with v2 header ---
 setup_test
 create_event_log "$_TEST_TMPDIR/.claude" "se-health" \
   "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/a.ts" > /dev/null
@@ -52,17 +86,18 @@ run_session_end "se-health" > /dev/null
 health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
 assert_file_exists "creates_health_file" "$health_file"
 assert_file_contains "health_has_header" "$health_file" "# Cortex Health Log"
+assert_file_contains "health_header_has_v2_fields" "$health_file" "# Fields: v2|date|session_id"
 
-# --- Test 2: Appends data row with today's date ---
+# --- Test 2: Appends v2 data row with today's date ---
 setup_test
 create_event_log "$_TEST_TMPDIR/.claude" "se-row" \
   "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/a.ts" > /dev/null
 make_journal "$_TEST_TMPDIR"
 run_session_end "se-row" > /dev/null
 health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
-assert_file_contains "row_has_today_date" "$health_file" "$TODAY"
+assert_file_contains "row_has_v2_sentinel" "$health_file" "v2|${TODAY}|se-row|"
 
-# --- Test 3: Dedup by per-session flag (same session fires twice) ---
+# --- Test 3: Dedup by per-session flag (same session fires twice) -> 1 row ---
 setup_test
 create_event_log "$_TEST_TMPDIR/.claude" "se-dedup" \
   "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/a.ts" > /dev/null
@@ -72,23 +107,23 @@ run_session_end "se-dedup" > /dev/null
 health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
 assert_eq "dedup_per_session_one_row" "1" "$(count_health_rows "$health_file")"
 
-# --- Test 4: Dedup by date — a DIFFERENT session on the same day is blocked
-# by the global health-file date check, even though its own log has no
-# health_written event yet (Bug 2 fix, preserved). ---
+# --- Test 4: Per-SID dedup replaces date-wide dedup — TWO DIFFERENT sessions
+# on the SAME calendar date each get their OWN row (v2 §6.1: dedup keys off
+# session_id, not date). This is the opposite of the old v3 contract. ---
 setup_test
 create_event_log "$_TEST_TMPDIR/.claude" "se-dedupA" \
   "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/a.ts" > /dev/null
-LOG_B=$(create_event_log "$_TEST_TMPDIR/.claude" "se-dedupB" \
-  "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/b.ts")
+create_event_log "$_TEST_TMPDIR/.claude" "se-dedupB" \
+  "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/b.ts" > /dev/null
 make_journal "$_TEST_TMPDIR"
 run_session_end "se-dedupA" > /dev/null
 run_session_end "se-dedupB" > /dev/null
 health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
-assert_eq "dedup_by_date_blocks_different_session" "1" "$(count_health_rows "$health_file")"
-hw_b=$(count_events health_written '' '' "$LOG_B")
-assert_eq "dedup_by_date_still_flags_blocked_session" "1" "$hw_b"
+assert_eq "two_sids_same_date_two_rows" "2" "$(count_health_rows "$health_file")"
+assert_file_contains "row_a_present" "$health_file" "|se-dedupA|"
+assert_file_contains "row_b_present" "$health_file" "|se-dedupB|"
 
-# --- Test 5: Counts reasoning_misses from journal ---
+# --- Test 5: self_misses (field 14) counted from journal [reasoning-miss] tags ---
 setup_test
 create_event_log "$_TEST_TMPDIR/.claude" "se-miss" > /dev/null
 mkdir -p "$_TEST_TMPDIR/memory"
@@ -102,40 +137,14 @@ cat > "$_TEST_TMPDIR/memory/${TODAY}.md" << 'JEOF'
 JEOF
 run_session_end "se-miss" > /dev/null
 health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
-if [ -f "$health_file" ]; then
-  data_line=$(grep "^${TODAY}" "$health_file" | head -1)
-  reasoning_misses=$(echo "$data_line" | cut -d'|' -f2)
-else
-  reasoning_misses="0"
-fi
-assert_eq "counts_reasoning_misses" "3" "$reasoning_misses"
+assert_eq "counts_self_misses" "3" "$(v2_field "$health_file" 14)"
 
-# --- Test 6: Computes edits_per_commit (4 files, 2 commits = 2.0) ---
-setup_test
-create_event_log "$_TEST_TMPDIR/.claude" "se-epc" \
-  "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/a.ts" \
-  "1700000002|file_edit|r ${_TEST_TMPDIR}/src/lib/b.ts" \
-  "1700000003|file_edit|r ${_TEST_TMPDIR}/src/lib/c.ts" \
-  "1700000004|file_edit|r ${_TEST_TMPDIR}/src/lib/d.ts" \
-  "1700000005|commit|abc1234 feat: one" \
-  "1700000006|commit|def5678 feat: two" > /dev/null
-make_journal "$_TEST_TMPDIR"
-run_session_end "se-epc" > /dev/null
-health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
-if [ -f "$health_file" ]; then
-  data_line=$(grep "^${TODAY}" "$health_file" | head -1)
-  epc=$(echo "$data_line" | cut -d'|' -f3)
-else
-  epc="0"
-fi
-assert_eq "edits_per_commit_computed" "2.0" "$epc"
-
-# --- Test 7: No event log → returns {} ---
+# --- Test 6: No event log → returns {} ---
 setup_test
 result=$(run_session_end "nonexistent")
 assert_eq "no_event_log_empty" "{}" "$result"
 
-# --- Test 8: Appends health_written event to the session's own log ---
+# --- Test 7: Appends health_written event to the session's own log ---
 setup_test
 LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "se-flag" \
   "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/a.ts")
@@ -144,7 +153,7 @@ run_session_end "se-flag" > /dev/null
 hw=$(last_event health_written "$LOG")
 assert_eq "sets_health_written_event" "$TODAY" "$hw"
 
-# --- Test 9: Creates cross-session file ---
+# --- Test 8: Creates cross-session file (unchanged from v3/v4) ---
 setup_test
 create_event_log "$_TEST_TMPDIR/.claude" "se-cross" \
   "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/utils.ts" > /dev/null
@@ -153,8 +162,8 @@ run_session_end "se-cross" > /dev/null
 cross_file="$_TEST_TMPDIR/.claude/cortex/cross-session.local.md"
 assert_file_exists "creates_cross_session_file" "$cross_file"
 
-# --- Test 10: Topology = "focused" + domain_tag = project basename for 2
-# unique files (each edited once) ---
+# --- Test 9: topology="focused" for 2 unique r-edits (<3 => domain "mixed",
+# not idle — activity present, just not enough to attribute a segment) ---
 setup_test
 create_event_log "$_TEST_TMPDIR/.claude" "se-topo" \
   "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/a.ts" \
@@ -162,36 +171,21 @@ create_event_log "$_TEST_TMPDIR/.claude" "se-topo" \
 make_journal "$_TEST_TMPDIR"
 run_session_end "se-topo" > /dev/null
 health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
-if [ -f "$health_file" ]; then
-  data_line=$(grep "^${TODAY}" "$health_file" | head -1)
-  topology=$(echo "$data_line" | cut -d'|' -f11)
-  domain_tag=$(echo "$data_line" | cut -d'|' -f12)
-else
-  topology="unknown"
-  domain_tag="unknown"
-fi
-assert_eq "topology_focused" "focused" "$topology"
-assert_eq "domain_tag_basename" "$(basename "$_TEST_TMPDIR")" "$domain_tag"
+assert_eq "topology_focused" "focused" "$(v2_field "$health_file" 12)"
+assert_eq "domain_under_3_redits_mixed" "mixed" "$(v2_field "$health_file" 13)"
 
-# --- Test 11: Idle session (zero activity, empty journal) → topology=idle,
-# domain_tag=idle ---
+# --- Test 10: Idle session (zero activity, empty journal) → topology stays
+# "focused" (no re-edits to escalate it), domain="idle" (zero r-edits — the
+# v2 idle signal; there is no separate topology=idle state anymore) ---
 setup_test
 create_event_log "$_TEST_TMPDIR/.claude" "se-idle" > /dev/null
 make_journal "$_TEST_TMPDIR"
 run_session_end "se-idle" > /dev/null
 health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
-if [ -f "$health_file" ]; then
-  data_line=$(grep "^${TODAY}" "$health_file" | head -1)
-  topology=$(echo "$data_line" | cut -d'|' -f11)
-  domain_tag=$(echo "$data_line" | cut -d'|' -f12)
-else
-  topology="unknown"
-  domain_tag="unknown"
-fi
-assert_eq "topology_idle" "idle" "$topology"
-assert_eq "domain_tag_idle" "idle" "$domain_tag"
+assert_eq "topology_focused_when_idle" "focused" "$(v2_field "$health_file" 12)"
+assert_eq "domain_idle_when_zero_redits" "idle" "$(v2_field "$health_file" 13)"
 
-# --- Test 12: High-churn topology (6+ re-edits of the same file) ---
+# --- Test 11: High-churn topology (6+ re-edits of the same file) ---
 setup_test
 seed=()
 for i in $(seq 1 6); do
@@ -201,64 +195,175 @@ create_event_log "$_TEST_TMPDIR/.claude" "se-churn" "${seed[@]}" > /dev/null
 make_journal "$_TEST_TMPDIR"
 run_session_end "se-churn" > /dev/null
 health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
-data_line=$(grep "^${TODAY}" "$health_file" | head -1)
-topology=$(echo "$data_line" | cut -d'|' -f11)
-assert_eq "topology_high_churn" "high-churn" "$topology"
+assert_eq "topology_high_churn" "high-churn" "$(v2_field "$health_file" 12)"
 
-# --- Test 13: Rolling averages + trend detection (6+ data rows required) ---
-# Seed 5 prior (non-idle) rows with reasoning_misses=0, then let the script
-# append a 6th row for today with reasoning_misses=3 (via journal tags).
-# recent_3 = avg(rows 4,5,6) = (0+0+3)/3 = 1.0; prior = avg(rows 1,2,3) = 0.0;
-# diff = 1.0 > 0.5 => "degrading". avg_reasoning_misses over all 6 = 3/6 = 0.5.
+# --- Test 12: v2 row shape, field-by-field (no git — has_git=false path) ---
 setup_test
-create_event_log "$_TEST_TMPDIR/.claude" "se-trend" > /dev/null
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "se-v2shape" \
+  "1700000090|file_edit|r ${_TEST_TMPDIR}/src/lib/a.ts" \
+  "1700000091|file_edit|r ${_TEST_TMPDIR}/src/lib/a.ts" \
+  "1700000092|file_edit|r ${_TEST_TMPDIR}/src/lib/a.ts" \
+  "1700000093|file_edit|r ${_TEST_TMPDIR}/src/lib/b.ts" \
+  "1700000094|file_edit|r ${_TEST_TMPDIR}/src/lib/b.ts" \
+  "1700000100|commit|abc1234 fix: one" \
+  "1700000101|commit|def5678 feat: two" \
+  "1700000102|test_run|vitest")
+make_journal "$_TEST_TMPDIR"
+run_session_end "se-v2shape" > /dev/null
 health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
-create_health_file "$health_file" \
-  "2026-06-01|0|1.0|true|0|0|0|0|10|1|focused|proj" \
-  "2026-06-02|0|1.0|true|0|0|0|0|10|1|focused|proj" \
-  "2026-06-03|0|1.0|true|0|0|0|0|10|1|focused|proj" \
-  "2026-06-04|0|1.0|true|0|0|0|0|10|1|focused|proj" \
-  "2026-06-05|0|1.0|true|0|0|0|0|10|1|focused|proj"
-mkdir -p "$_TEST_TMPDIR/memory"
-cat > "$_TEST_TMPDIR/memory/${TODAY}.md" << 'JEOF'
-# Journal
-- Did something [reasoning-miss]
-- Another thing [reasoning-miss]
-- Third one [reasoning-miss]
-JEOF
-run_session_end "se-trend" > /dev/null
-trend=$(grep '^trend_direction=' "$health_file" | cut -d= -f2 | tr -d '\r')
-avg_rm=$(grep '^avg_reasoning_misses=' "$health_file" | cut -d= -f2 | tr -d '\r')
-assert_eq "rolling_trend_degrading" "degrading" "$trend"
-assert_eq "rolling_avg_reasoning_misses" "0.5" "$avg_rm"
+assert_eq "v2_field1_sentinel" "v2" "$(v2_field "$health_file" 1)"
+assert_eq "v2_field2_date" "$TODAY" "$(v2_field "$health_file" 2)"
+assert_eq "v2_field3_session_id" "se-v2shape" "$(v2_field "$health_file" 3)"
+assert_eq "v2_field4_commits" "2" "$(v2_field "$health_file" 4)"
+assert_eq "v2_field5_material_edits" "5" "$(v2_field "$health_file" 5)"
+assert_eq "v2_field6_fix_ratio_no_git_is_zero" "0.00" "$(v2_field "$health_file" 6)"
+assert_eq "v2_field7_reverts" "0" "$(v2_field "$health_file" 7)"
+assert_eq "v2_field8_rework_files" "0" "$(v2_field "$health_file" 8)"
+assert_eq "v2_field9_tests_pass" "pass" "$(v2_field "$health_file" 9)"
+assert_eq "v2_field11_max_re_edits" "3" "$(v2_field "$health_file" 11)"
+assert_eq "v2_field12_topology" "iterating" "$(v2_field "$health_file" 12)"
+assert_eq "v2_field13_domain" "src" "$(v2_field "$health_file" 13)"
+assert_eq "v2_field14_self_misses" "0" "$(v2_field "$health_file" 14)"
 
-# --- Test 14: lessons_created counted via real git diff (needs a real repo —
-# git status/diff genuinely runs against PROJECT_DIR) ---
+# --- Test 13: fix_ratio is the literal string "null" when commits==0 ---
 setup_test
-GITDIR="$_TEST_TMPDIR/git-proj"
-rm -rf "$GITDIR"
-mkdir -p "$GITDIR/tasks"
-git -C "$GITDIR" init -q
-git -C "$GITDIR" config user.email "test@test.local"
-git -C "$GITDIR" config user.name "Cortex Test"
-echo "# Lessons" > "$GITDIR/tasks/lessons.md"
-git -C "$GITDIR" add -A
-git -C "$GITDIR" commit -q -m "chore: baseline"
+create_event_log "$_TEST_TMPDIR/.claude" "se-nullratio" \
+  "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/a.ts" > /dev/null
+make_journal "$_TEST_TMPDIR"
+run_session_end "se-nullratio" > /dev/null
+health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
+assert_eq "fix_ratio_null_when_no_commits" "null" "$(v2_field "$health_file" 6)"
+assert_eq "commits_zero" "0" "$(v2_field "$health_file" 4)"
+
+# --- Domain matrix (spec §6.1) ---
+
+# Test 14: dominant segment wins (3 under src/, 1 under docs/ — no tie)
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "se-dom-dominant")
+seed_file_edit "$LOG" r "${_TEST_TMPDIR}/src/lib/a.ts"
+seed_file_edit "$LOG" r "${_TEST_TMPDIR}/src/lib/b.ts"
+seed_file_edit "$LOG" r "${_TEST_TMPDIR}/src/app/c.ts"
+seed_file_edit "$LOG" r "${_TEST_TMPDIR}/docs/readme.md"
+make_journal "$_TEST_TMPDIR"
+run_session_end "se-dom-dominant" > /dev/null
+health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
+assert_eq "domain_dominant_segment" "src" "$(v2_field "$health_file" 13)"
+
+# Test 15: tie between two segments (2 under src/, 2 under docs/) -> mixed
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "se-dom-tie")
+seed_file_edit "$LOG" r "${_TEST_TMPDIR}/src/lib/a.ts"
+seed_file_edit "$LOG" r "${_TEST_TMPDIR}/src/lib/b.ts"
+seed_file_edit "$LOG" r "${_TEST_TMPDIR}/docs/one.md"
+seed_file_edit "$LOG" r "${_TEST_TMPDIR}/docs/two.md"
+make_journal "$_TEST_TMPDIR"
+run_session_end "se-dom-tie" > /dev/null
+health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
+assert_eq "domain_tie_is_mixed" "mixed" "$(v2_field "$health_file" 13)"
+
+# Test 16: fewer than 3 r-edits -> mixed even with a clear single segment
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "se-dom-under3")
+seed_file_edit "$LOG" r "${_TEST_TMPDIR}/src/lib/a.ts"
+seed_file_edit "$LOG" r "${_TEST_TMPDIR}/src/lib/b.ts"
+make_journal "$_TEST_TMPDIR"
+run_session_end "se-dom-under3" > /dev/null
+health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
+assert_eq "domain_under_3_is_mixed" "mixed" "$(v2_field "$health_file" 13)"
+
+# Test 17: zero r-edits -> idle (x-flagged edits don't count toward domain)
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "se-dom-zero")
+seed_file_edit "$LOG" x "${_TEST_TMPDIR}/.claude/plans/scratch.md"
+make_journal "$_TEST_TMPDIR"
+run_session_end "se-dom-zero" > /dev/null
+health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
+assert_eq "domain_zero_redits_is_idle" "idle" "$(v2_field "$health_file" 13)"
+
+# --- Test 18: header strip — a pre-existing v3-style header (trend_direction=/
+# avg_*=/---) is idempotently removed on session-end, and stays gone on a
+# SECOND session-end (different sid — dedup would otherwise mask the check) ---
+setup_test
+health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
+mkdir -p "$(dirname "$health_file")"
+create_health_file "$health_file" "2026-06-01|0|1.0|true|0|0|0|0|10|1|focused|proj"
+create_event_log "$_TEST_TMPDIR/.claude" "se-strip1" \
+  "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/a.ts" > /dev/null
+make_journal "$_TEST_TMPDIR"
+run_session_end "se-strip1" > /dev/null
+assert_file_not_contains "header_strip_removes_trend" "$health_file" "trend_direction="
+assert_file_not_contains "header_strip_removes_avg" "$health_file" "avg_reasoning_misses="
+assert_file_not_contains "header_strip_removes_separator" "$health_file" "---"
+# Idempotence: a second session-end (new sid, avoids per-sid dedup) doesn't
+# choke on an already-clean file and the lines stay gone.
+create_event_log "$_TEST_TMPDIR/.claude" "se-strip2" \
+  "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/a.ts" > /dev/null
+run_session_end "se-strip2" > /dev/null
+assert_file_not_contains "header_strip_idempotent_trend" "$health_file" "trend_direction="
+assert_eq "header_strip_both_rows_survive" "3" "$(count_health_rows "$health_file")"
+
+# --- Test 19: fix_ratio + reverts computed from REAL git log subjects since
+# session_start (real git sandbox — a mocked git can't exercise --since) ---
+setup_test
+GITDIR="$_TEST_TMPDIR/git-fixratio"
+make_git_project "$GITDIR"
 mkdir -p "$GITDIR/memory"
 echo "# Journal" > "$GITDIR/memory/${TODAY}.md"
-cat >> "$GITDIR/tasks/lessons.md" << 'EOF'
-## New lesson
-- pattern one
-- pattern two
-EOF
-create_event_log "$GITDIR/.claude" "se-lessons" > /dev/null
-run_session_end "se-lessons" "$GITDIR" > /dev/null
+now_epoch=$(date +%s)
+session_start_epoch=$((now_epoch - 300))
+session_start_iso=$(date -u -d "@${session_start_epoch}" +%Y-%m-%dT%H:%M:%SZ)
+commit_at "$GITDIR" "$((now_epoch - 200))" "fix: the parser" "a.ts"
+commit_at "$GITDIR" "$((now_epoch - 150))" 'Revert "something"' "b.ts"
+commit_at "$GITDIR" "$((now_epoch - 100))" "chore: cleanup" "c.ts"
+create_event_log "$GITDIR/.claude" "se-fixratio" \
+  "$((now_epoch + 1))|session_start|${session_start_iso} test-model" \
+  "$((now_epoch + 2))|commit|c1 fix: the parser" \
+  "$((now_epoch + 3))|commit|c2 revert: something" \
+  "$((now_epoch + 4))|commit|c3 chore: cleanup" > /dev/null
+run_session_end "se-fixratio" "$GITDIR" > /dev/null
 health_file="$GITDIR/.claude/cortex/health.local.md"
-data_line=$(grep "^${TODAY}" "$health_file" | head -1)
-lessons_created=$(echo "$data_line" | cut -d'|' -f6)
-assert_eq "lessons_created_counted_via_git_diff" "3" "$lessons_created"
+assert_eq "fix_ratio_two_of_three" "0.67" "$(v2_field "$health_file" 6)"
+assert_eq "reverts_counts_capital_revert_no_colon" "1" "$(v2_field "$health_file" 7)"
 
-# --- Test 15: proposals_need_archiving is NOT in the closed v4 event
+# --- Test 20: rework_files — intersection of files committed THIS session
+# with files touched by a commit in the 14 days before session_start ---
+setup_test
+GITDIR="$_TEST_TMPDIR/git-rework"
+make_git_project "$GITDIR"
+mkdir -p "$GITDIR/memory"
+echo "# Journal" > "$GITDIR/memory/${TODAY}.md"
+now_epoch=$(date +%s)
+session_start_epoch=$((now_epoch - 300))
+session_start_iso=$(date -u -d "@${session_start_epoch}" +%Y-%m-%dT%H:%M:%SZ)
+prior_epoch=$((session_start_epoch - 10 * 86400))
+commit_at "$GITDIR" "$prior_epoch" "chore: prior work" "rework.ts" "untouched.ts"
+commit_at "$GITDIR" "$((now_epoch - 60))" "feat: session work" "rework.ts" "fresh.ts"
+create_event_log "$GITDIR/.claude" "se-rework" \
+  "$((now_epoch + 1))|session_start|${session_start_iso} test-model" \
+  "$((now_epoch + 2))|commit|c1 feat: session work" > /dev/null
+run_session_end "se-rework" "$GITDIR" > /dev/null
+health_file="$GITDIR/.claude/cortex/health.local.md"
+assert_eq "rework_files_intersection" "1" "$(v2_field "$health_file" 8)"
+
+# --- Test 21: rework_files stays 0 when there are no prior-window commits
+# (fresh repo, session's first-ever commits) ---
+setup_test
+GITDIR="$_TEST_TMPDIR/git-norework"
+make_git_project "$GITDIR"
+mkdir -p "$GITDIR/memory"
+echo "# Journal" > "$GITDIR/memory/${TODAY}.md"
+now_epoch=$(date +%s)
+session_start_epoch=$((now_epoch - 300))
+session_start_iso=$(date -u -d "@${session_start_epoch}" +%Y-%m-%dT%H:%M:%SZ)
+commit_at "$GITDIR" "$((now_epoch - 60))" "feat: first ever commit" "only.ts"
+create_event_log "$GITDIR/.claude" "se-norework" \
+  "$((now_epoch + 1))|session_start|${session_start_iso} test-model" \
+  "$((now_epoch + 2))|commit|c1 feat: first ever commit" > /dev/null
+run_session_end "se-norework" "$GITDIR" > /dev/null
+health_file="$GITDIR/.claude/cortex/health.local.md"
+assert_eq "rework_files_zero_no_prior_window" "0" "$(v2_field "$health_file" 8)"
+
+# --- Test 22: proposals_need_archiving is NOT in the closed v4 event
 # vocabulary (spec §3.3) — even with >50 proposal ids, the v3 write-only-dead
 # flag must not be emitted as an event. Guards against reintroduction. ---
 setup_test

@@ -60,13 +60,25 @@ result=$(run_statusline "{\"session_id\":\"sl-cautious\"}")
 line2=$(echo "$result" | tail -1)
 assert_contains "cautious_mode_orange_heart" "$line2" "🧡 cautious"
 
-# --- Test 5: trend arrow + lessons/proposals counts read from health file,
-# lessons.md, and proposals file (unchanged read paths) ---
+# --- Test 5: trend arrow (>=10 non-idle v2 rows, improving verdict) +
+# lessons/proposals counts read from health file, lessons.md, and proposals
+# file (unchanged read paths). Improving requires BOTH mirror signals: a
+# fix_ratio median that FELL by more than 0.15 (last-5 vs prior-5) and zero
+# high-rework rows among the last 5 (spec §6.2). ---
 setup_test
 create_event_log "$_TEST_TMPDIR/.claude" "sl-trend" > /dev/null
 health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
-create_health_file "$health_file" "2026-07-01|0|1.0|true|0|0|0|0|10|1|focused|proj"
-sed -i 's/^trend_direction=.*/trend_direction=improving/' "$health_file"
+create_health_file "$health_file" \
+  "v2|2026-06-01|old-sid-1|2|5|0.50|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-02|old-sid-2|2|5|0.50|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-03|old-sid-3|2|5|0.50|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-04|old-sid-4|2|5|0.50|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-05|old-sid-5|2|5|0.50|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-06|old-sid-6|2|5|0.00|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-07|old-sid-7|2|5|0.00|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-08|old-sid-8|2|5|0.00|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-09|old-sid-9|2|5|0.00|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-10|old-sid-10|2|5|0.00|0|0|pass|10|3|iterating|src|0"
 mkdir -p "$_TEST_TMPDIR/tasks"
 printf '## Lesson one\nbody\n## Lesson two\nbody\n' > "$_TEST_TMPDIR/tasks/lessons.md"
 proposals_file="$_TEST_TMPDIR/.claude/cortex/proposals.local.md"
@@ -78,10 +90,33 @@ assert_contains "lessons_absorbed_count" "$line2" "2 absorbed"
 assert_contains "mutations_queued_count" "$line2" "1 mutations queued"
 assert_contains "improving_trend_thriving_heart" "$line2" "💚 thriving"
 
-# --- Test 6: no event log, no health file — graceful defaults (stable
-# trend, thriving heart from zero avg_misses default, zero counts). Opted-in
-# project (sentinel stamped directly — no create_event_log call, since this
-# test is specifically about the absence of a log/health file). ---
+# --- Test 5b: >=10 non-idle v2 rows with a degrading rework signal (>=3 of
+# the last 5 rows have rework_files >= 3) shows the degrading arrow + a
+# stressed heart. ---
+setup_test
+create_event_log "$_TEST_TMPDIR/.claude" "sl-degrading" > /dev/null
+health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
+create_health_file "$health_file" \
+  "v2|2026-06-01|old-sid-1|2|5|0.00|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-02|old-sid-2|2|5|0.00|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-03|old-sid-3|2|5|0.00|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-04|old-sid-4|2|5|0.00|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-05|old-sid-5|2|5|0.00|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-06|old-sid-6|2|5|0.00|3|3|pass|10|3|iterating|src|0" \
+  "v2|2026-06-07|old-sid-7|2|5|0.00|3|3|pass|10|3|iterating|src|0" \
+  "v2|2026-06-08|old-sid-8|2|5|0.00|3|3|pass|10|3|iterating|src|0" \
+  "v2|2026-06-09|old-sid-9|2|5|0.00|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-10|old-sid-10|2|5|0.00|0|0|pass|10|3|iterating|src|0"
+result=$(run_statusline "{\"session_id\":\"sl-degrading\"}")
+line2=$(echo "$result" | tail -1)
+assert_contains "trend_arrow_degrading" "$line2" "↘ degrading"
+assert_contains "degrading_trend_stressed_heart" "$line2" "stressed"
+
+# --- Test 6: no event log, no health file — 0 total rows is below the
+# trend-readiness threshold, so line 2 shows the raw-count line instead of
+# an arrow, and the heart defaults to the neutral "adapting" state (v2:
+# self-report avg_misses is gone, no more zero-misses-implies-thriving
+# default). ---
 setup_test
 mkdir -p "$_TEST_TMPDIR/.claude/cortex"
 touch "$_TEST_TMPDIR/.claude/cortex/enabled"
@@ -90,8 +125,24 @@ line1=$(echo "$result" | head -1)
 line2=$(echo "$result" | tail -1)
 assert_contains "no_log_zero_edits" "$line1" "0 edits"
 assert_contains "no_log_zero_commits" "$line1" "0 commits"
-assert_contains "no_log_default_thriving" "$line2" "💚 thriving"
-assert_contains "no_log_default_stable_trend" "$line2" "→ stable"
+assert_contains "no_log_default_adapting" "$line2" "💛 adapting"
+assert_contains "no_log_raw_count_below_threshold" "$line2" "📊 0 sessions tracked — trend at 10"
+
+# --- Test 6b: SOME rows present (legacy + v2) but still below the >=10
+# non-idle-v2 threshold — the raw-count line shows the TOTAL (legacy + v2),
+# per spec §6.2 ("legacy rows counted for the N display, excluded from
+# median math"). ---
+setup_test
+create_event_log "$_TEST_TMPDIR/.claude" "sl-belowten" > /dev/null
+health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
+create_health_file "$health_file" \
+  "2026-05-01|0|1.0|true|0|0|0|0|10|1|focused|proj" \
+  "2026-05-02|0|1.0|true|0|0|0|0|10|1|focused|proj" \
+  "v2|2026-06-01|old-sid-1|2|5|0.00|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-02|old-sid-2|2|5|0.00|0|0|pass|10|3|iterating|src|0"
+result=$(run_statusline "{\"session_id\":\"sl-belowten\"}")
+line2=$(echo "$result" | tail -1)
+assert_contains "below_threshold_counts_legacy_and_v2" "$line2" "📊 4 sessions tracked — trend at 10"
 
 # --- Test 7: readonly resolver falls back to current-session.id marker when
 # the hook JSON arg has no session_id (statusline polled without full context) ---

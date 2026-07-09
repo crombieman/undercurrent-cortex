@@ -16,6 +16,12 @@ NATIVE=false
 # Buffer stdin (SessionEnd may or may not provide JSON)
 INPUT=$(cat)
 
+# session_id, extracted once up front — used both by the native-suppression
+# check below AND (v2) as the health row's own session_id field / per-sid
+# dedup key. Same extraction resolve_event_log uses internally, so this is
+# guaranteed to match whatever EVENT_LOG gets resolved to.
+SESSION_ID=$(_eio_extract_sid "$INPUT")
+
 # Opt-in gate (spec §4.3): un-opted repos are fully inert. Directory
 # existence is NOT the signal — only the explicit sentinel file, written by
 # /cortex:setup or session-start's grandfathering check.
@@ -32,8 +38,7 @@ if [ "$NATIVE" != true ]; then
   _marker="$(_eio_cortex_dir)/native-hooks.ok"
   if [ -f "$_marker" ]; then
     _marker_sid=$(awk 'NR==1{print $3}' "$_marker" 2>/dev/null | tr -d '[:space:]' || true)
-    _payload_sid=$(_eio_extract_sid "$INPUT")
-    if [ -n "$_payload_sid" ] && [ "$_marker_sid" = "$_payload_sid" ]; then
+    if [ -n "$SESSION_ID" ] && [ "$_marker_sid" = "$SESSION_ID" ]; then
       printf '{}'
       exit 0
     fi
@@ -62,100 +67,61 @@ if [ -d "$EVENT_LOG_PROJECT_DIR/memory" ]; then
   PROJECT_DIR="$EVENT_LOG_PROJECT_DIR"
 fi
 
-# HEALTH_FILE/CROSS_FILE deliberately do NOT derive from the locally-resolved
-# (possibly EVENT_LOG-overridden) PROJECT_DIR above — they go through the W4
-# global helpers instead, which re-resolve via _eio_project_dir(). Those two
-# are always equal within a single invocation: resolve_event_log(), which
-# located EVENT_LOG, and _eio_project_dir() both key off the same
-# CORTEX_PROJECT_DIR_OVERRIDE/CORTEX_PROJECT_DIR/git-rev-parse chain in this
-# same process, so EVENT_LOG_PROJECT_DIR (walked back up from EVENT_LOG's own
-# path) can only diverge from _eio_project_dir() on symlink/path-canonicalization
-# edge cases the Bug-4 override was never observed to hit — see task report.
+# HEALTH_FILE deliberately does NOT derive from the locally-resolved
+# (possibly EVENT_LOG-overridden) PROJECT_DIR above — it goes through the W4
+# global helper instead (eio_health_file, re-resolves via _eio_project_dir()).
+# Those two are always equal within a single invocation — see task report.
 HEALTH_FILE="$(eio_health_file)"
 
-# --- Compute metrics ---
+# --- Compute metrics (v2: git-derived core + self-report demoted to a single
+# labeled last column — spec §6.1) ---
 today=$(date +%Y-%m-%d)
 journal="${PROJECT_DIR}/memory/${today}.md"
 
-# 1. reasoning_misses: count [reasoning-miss] tags in today's journal
+# self_misses: journal [reasoning-miss] count, computed EXACTLY as v3 did
+# (kept verbatim — labeled self-report, drives nothing downstream).
 # Note: grep -c outputs "0" AND exits non-zero on no match. Using || echo 0
 # produces "0\n0" (double output). Guard with grep -q first (lessons.md).
-reasoning_misses=0
+self_misses=0
 if [ -f "$journal" ] && grep -q '\[reasoning-miss\]' "$journal" 2>/dev/null; then
-  reasoning_misses=$(grep -c '\[reasoning-miss\]' "$journal" 2>/dev/null)
+  self_misses=$(grep -c '\[reasoning-miss\]' "$journal" 2>/dev/null)
 fi
 
-# 2. edits_per_commit: total edit operations / max(commits, 1)
-commits_count=$(count_events commit)
-commits_count="${commits_count:-0}"
+# commits / material_edits — straight event-log counts, whole session.
+commits=$(count_events commit)
+commits="${commits:-0}"
+material_edits=$(count_events file_edit r)
+material_edits="${material_edits:-0}"
+
+# files_modified: ALL file_edit paths (r + x), flag stripped — feeds topology/
+# max_re_edits below AND the (unchanged) cross-session tracker further down.
 files_modified=$(list_events file_edit | sed 's/^[rx] //')
-total_edits=0
-if [ -n "$files_modified" ]; then
-  total_edits=$(echo "$files_modified" | wc -l | tr -d ' ')
-fi
-divisor=$commits_count
-[ "$divisor" -eq 0 ] && divisor=1
-edits_per_commit=$(awk "BEGIN { printf \"%.1f\", $total_edits / $divisor }")
 
-# 3. docs_synced
-docs_synced=false
-[ "$(count_events docs_edit)" -gt 0 ] && docs_synced=true
-
-# 4. tests_delta: count test/spec files among file_edit paths (not unique —
-# v3 counted every edit line, so a test file touched 3x counts as 3)
-tests_delta=0
-if [ -n "$files_modified" ]; then
-  if echo "$files_modified" | grep -qE '\.(test|spec)\.' 2>/dev/null; then
-    tests_delta=$(echo "$files_modified" | grep -cE '\.(test|spec)\.' 2>/dev/null)
-  fi
-fi
-
-# 5. lessons_created: lines added to tasks/lessons.md (staged + unstaged)
-lessons_created=0
-if command -v git >/dev/null 2>&1; then
-  diff_output=$(git -C "$PROJECT_DIR" diff HEAD -- tasks/lessons.md 2>/dev/null || true)
-  if [ -n "$diff_output" ] && echo "$diff_output" | grep -q '^+[^+]' 2>/dev/null; then
-    lessons_created=$(echo "$diff_output" | grep -c '^+[^+]' 2>/dev/null)
-  fi
-fi
-
-# 6/7. carry_over resolution: count [carry-over] tags in today's journal
-# Bug 3 fix: state file [carry_over] section is never populated — parse journal instead.
-# Strikethrough ~~[carry-over]~~ marks resolved carry-overs.
-carry_total=0
-carry_resolved=0
-if [ -f "$journal" ]; then
-  if grep -q '\[carry-over\]' "$journal" 2>/dev/null; then
-    carry_total=$(grep -c '\[carry-over\]' "$journal" 2>/dev/null)
-  fi
-  if grep -q '~~\[carry-over\]' "$journal" 2>/dev/null; then
-    carry_resolved=$(grep -c '~~\[carry-over\]' "$journal" 2>/dev/null)
-  fi
-fi
-
-# 8. duration_minutes: session_start → now. Event value is "<iso> <model>" —
-# the first space-token is the timestamp (session-start hook contract).
+# session_start / start_epoch — anchor for duration_min AND the git-derived
+# windows below (fix_ratio/reverts/rework_files all key off it).
 session_start_event=$(last_event session_start)
 session_start="${session_start_event%% *}"
-duration_min=0
+start_epoch=0
 if [ -n "$session_start" ] && [ "$session_start" != "PLACEHOLDER_TIME" ] && [ "$session_start" != "unknown" ]; then
   # C-2 fix: replace ISO 8601 T separator with space for GNU date
   start_epoch=$(date -d "${session_start/T/ }" +%s 2>/dev/null || echo "0")
-  now_epoch=$(date +%s)
-  if [ "$start_epoch" -gt 0 ]; then
-    duration_min=$(( (now_epoch - start_epoch) / 60 ))
-  fi
 fi
 
-# 9/10. Topology classification from re-edit counts
+# duration_min: session_start → now.
+duration_min=0
+if [ "$start_epoch" -gt 0 ]; then
+  now_epoch=$(date +%s)
+  duration_min=$(( (now_epoch - start_epoch) / 60 ))
+fi
+
+# max_re_edits / topology — UNCHANGED from v3 (r+x file_edit re-edit counts).
+# No "idle" topology state in v2: idle semantics now live solely in `domain`
+# (below), computed from r-flagged edits specifically.
 max_re_edits=0
 topology="focused"
 if [ -n "$files_modified" ]; then
-  # Find max edits to any single file
   max_re_edits=$(echo "$files_modified" | sort | uniq -c | awk '{print $1}' | sort -rn | head -n 1)
   max_re_edits="${max_re_edits:-0}"
-
-  # Classify: focused (<=2), iterating (3-5), high-churn (6+)
   if [ "$max_re_edits" -ge 6 ]; then
     topology="high-churn"
   elif [ "$max_re_edits" -ge 3 ]; then
@@ -163,19 +129,95 @@ if [ -n "$files_modified" ]; then
   fi
 fi
 
-# --- Domain tagging ---
-# Bug 1 fix: use project basename instead of regex path extraction.
-# The regex [^/]+/[^/]+ breaks on Windows drive paths (C:/Users → domain_tag).
-domain_tag="mixed"
-if [ -n "$files_modified" ]; then
-  domain_tag=$(basename "$PROJECT_DIR" 2>/dev/null || echo "unknown")
-elif [ "${total_edits:-0}" -eq 0 ]; then
-  domain_tag="idle"
+# --- Domain tagging (v2, spec §6.1): most-frequent FIRST path segment of
+# r-flagged file_edit paths, relative to PROJECT_DIR. Zero r-edits => idle
+# (this is the v2 idle signal — trend/median readers filter on it). Ties or
+# fewer than 3 r-edits => mixed (not enough signal, or genuinely split). ---
+domain="idle"
+if [ "$material_edits" -gt 0 ]; then
+  domain="mixed"
+  if [ "$material_edits" -ge 3 ]; then
+    r_paths=$(list_events file_edit | grep '^r ' | sed 's/^r //' || true)
+    if [ -n "$r_paths" ]; then
+      pd_norm=$(normalize_path "$PROJECT_DIR")
+      pd_norm="${pd_norm%/}"
+      segments=""
+      while IFS= read -r rp; do
+        [ -z "$rp" ] && continue
+        np=$(normalize_path "$rp")
+        rel="$np"
+        case "$np" in
+          "$pd_norm"/*) rel="${np#"$pd_norm"/}" ;;
+        esac
+        seg="${rel%%/*}"
+        [ -z "$seg" ] && continue
+        segments="${segments}${seg}"$'\n'
+      done <<< "$r_paths"
+      if [ -n "$segments" ]; then
+        counts=$(printf '%s\n' "$segments" | grep -v '^$' | sort | uniq -c | sort -rn \
+          | awk '{ c = $1; $1 = ""; sub(/^[ \t]+/, ""); print c "|" $0 }')
+        top_count=$(echo "$counts" | head -1 | cut -d'|' -f1)
+        top_name=$(echo "$counts" | head -1 | cut -d'|' -f2-)
+        second_count=$(echo "$counts" | sed -n '2p' | cut -d'|' -f1)
+        if [ -n "$second_count" ] && [ "$second_count" = "$top_count" ]; then
+          domain="mixed"
+        elif [ -n "$top_name" ]; then
+          domain="$top_name"
+        fi
+      fi
+    fi
+  fi
 fi
 
-# --- Cross-session file tracking (runs before zero-metric skip) ---
-# Cross-session tracks file edit patterns across sessions — this should happen
-# regardless of whether we write a health row. Moved before zero-metric exit.
+# --- Git-derived metrics (v2 measurement core, spec §6.1) ---
+has_git=false
+if command -v git >/dev/null 2>&1 && git -C "$PROJECT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+  has_git=true
+fi
+
+fix_or_revert_count=0
+reverts=0
+if [ "$has_git" = true ] && [ "$start_epoch" -gt 0 ]; then
+  commit_subjects=$(git -C "$PROJECT_DIR" log --since="$session_start" --format=%s 2>/dev/null || true)
+  if [ -n "$commit_subjects" ]; then
+    fix_or_revert_count=$(printf '%s\n' "$commit_subjects" | grep -icE '^(fix:|revert)' 2>/dev/null || true)
+    reverts=$(printf '%s\n' "$commit_subjects" | grep -icE '^revert' 2>/dev/null || true)
+  fi
+fi
+fix_or_revert_count="${fix_or_revert_count:-0}"
+reverts="${reverts:-0}"
+
+fix_ratio="null"
+if [ "$commits" -gt 0 ]; then
+  fix_ratio=$(awk "BEGIN { printf \"%.2f\", ${fix_or_revert_count} / ${commits} }")
+fi
+
+# rework_files: files committed THIS session that were ALSO touched by a
+# commit in the 14 days immediately preceding session_start — a thrash/rework
+# proxy. Empty repo or zero commits this session => 0 (gate on commits>0
+# short-circuits without ever shelling out to git for the common no-op case).
+rework_files=0
+if [ "$has_git" = true ] && [ "$start_epoch" -gt 0 ] && [ "$commits" -gt 0 ]; then
+  session_files=$(git -C "$PROJECT_DIR" log --name-only --since="$session_start" --pretty=format: 2>/dev/null | sed '/^$/d' | sort -u || true)
+  if [ -n "$session_files" ]; then
+    prior_epoch=$(( start_epoch - 14 * 86400 ))
+    prior_start=$(date -u -d "@${prior_epoch}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "${prior_epoch}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "")
+    if [ -n "$prior_start" ]; then
+      prior_files=$(git -C "$PROJECT_DIR" log --name-only --since="$prior_start" --until="$session_start" --pretty=format: 2>/dev/null | sed '/^$/d' | sort -u || true)
+      if [ -n "$prior_files" ]; then
+        rework_files=$(comm -12 <(printf '%s\n' "$session_files") <(printf '%s\n' "$prior_files") | wc -l | tr -d ' ')
+      fi
+    fi
+  fi
+fi
+rework_files="${rework_files:-0}"
+
+# tests_pass
+tests_pass="none"
+[ "$(count_events test_run)" -gt 0 ] && tests_pass="pass"
+
+# --- Cross-session file tracking (runs before dedup — this should happen
+# regardless of whether we write a health row; unchanged from v3/v4) ---
 CROSS_FILE="$(_eio_cortex_dir)/cross-session.local.md"
 if [ ! -f "$CROSS_FILE" ]; then
   {
@@ -220,22 +262,11 @@ if [ -n "$cutoff" ] && [ -f "$CROSS_FILE" ]; then
   ' "$CROSS_FILE" > "$CROSS_FILE.tmp.$$" && mv "$CROSS_FILE.tmp.$$" "$CROSS_FILE"
 fi
 
-# --- Skip health row if session had zero tracked activity (noise prevention) ---
-# Tag idle sessions instead of skipping them. Previously this exited early,
-# making ~60% of sessions invisible to health tracking. Now we tag them as
-# idle and still write the row. Rolling averages exclude idle rows.
-if [ "${total_edits:-0}" -eq 0 ] && [ "${commits_count:-0}" -eq 0 ] && \
-   [ "${reasoning_misses:-0}" -eq 0 ] && [ "${tests_delta:-0}" -eq 0 ] && \
-   [ "${lessons_created:-0}" -eq 0 ] && [ "${carry_total:-0}" -eq 0 ]; then
-  topology="idle"
-fi
-
-# --- Dedup guard: prevent duplicate health writes if hook fires multiple times ---
-# Also prevents duplicates when the session-end skill calls this script AND the
-# SessionEnd hook fires afterward.
-# Bug 2 fix: also check global health file for today's date (per-session flag
-# doesn't prevent different sessions on the same day from writing duplicate rows).
-if grep -q "^${today}|" "$HEALTH_FILE" 2>/dev/null; then
+# --- Dedup guard: per session_id (v2 rows), NOT date-wide (spec §6.1). A
+# health_written event on THIS session's own log is still the fast path;
+# the health-file scan additionally catches the case where health_written
+# didn't make it to disk (crash) but the row itself did. ---
+if grep '^v2|' "$HEALTH_FILE" 2>/dev/null | grep -qF "|${SESSION_ID}|"; then
   append_event "health_written" "$today"
   printf '{}'
   exit 0
@@ -252,61 +283,31 @@ append_event "health_written" "$today"
 # --- Write to health file ---
 mkdir -p "$(dirname "$HEALTH_FILE")"
 
-# Create file with header if it doesn't exist
+# Header strip (spec §6.1): idempotently remove any trend_*/avg_*/--- lines
+# left behind by a pre-v4 (or otherwise stale) header. Those fields are now
+# computed at READ time (hooks/scripts/lib/health-trend.sh) — never stored.
+# Runs every session-end regardless of whether the lines are actually present
+# ("tolerate their reappearance": harmless no-op when already clean).
+if [ -f "$HEALTH_FILE" ]; then
+  awk '!/^trend_/ && !/^avg_/ && !/^---$/' "$HEALTH_FILE" > "$HEALTH_FILE.tmp.$$" 2>/dev/null \
+    && mv "$HEALTH_FILE.tmp.$$" "$HEALTH_FILE"
+fi
+
+# Create file with header if it doesn't exist (v2: no trend_*/avg_*/---
+# metadata lines — those are read-time-only now).
 if [ ! -f "$HEALTH_FILE" ]; then
   cat > "$HEALTH_FILE" << 'HEADER'
 # Cortex Health Log
-# Fields: date|reasoning_misses|edits_per_commit|docs_synced|tests_delta|lessons_created|carry_resolved|carry_total|duration_min|max_re_edits|topology|domain_tag
-trend_direction=stable
-avg_reasoning_misses=0.0
-avg_edits_per_commit=0.0
-avg_duration_min=0
----
+# Fields: v2|date|session_id|commits|material_edits|fix_ratio|reverts|rework_files|tests_pass|duration_min|max_re_edits|topology|domain|self_misses
 HEADER
 fi
 
-# Append data row (12 fields — old rows with 11 are backward-compatible)
-echo "${today}|${reasoning_misses}|${edits_per_commit}|${docs_synced}|${tests_delta}|${lessons_created}|${carry_resolved}|${carry_total}|${duration_min}|${max_re_edits}|${topology}|${domain_tag}" >> "$HEALTH_FILE"
+# Append v2 data row.
+echo "v2|${today}|${SESSION_ID}|${commits}|${material_edits}|${fix_ratio}|${reverts}|${rework_files}|${tests_pass}|${duration_min}|${max_re_edits}|${topology}|${domain}|${self_misses}" >> "$HEALTH_FILE"
 
-# --- Recompute rolling averages from last 10 data lines ---
-# Use ALL rows for session count/trend, but EXCLUDE idle rows from epc/duration averages.
-# Old rows (11 fields) without topology field are treated as non-idle.
-data_lines=$(grep -v '^#' "$HEALTH_FILE" | grep -v '^$' | grep -v '^trend_' | grep -v '^avg_' | grep -v '^---' | grep '|' | tail -10)
-line_count=$(echo "$data_lines" | wc -l | tr -d ' ')
-
-if [ "$line_count" -ge 1 ]; then
-  # Compute averages — reasoning_misses uses ALL rows, epc/duration exclude idle
-  read -r avg_rm avg_epc avg_dur <<< $(echo "$data_lines" | awk -F'|' '{
-    rm += $2; rm_count++
-    # Field 11 is topology — exclude idle rows from epc/duration averages
-    if (NF < 11 || $11 != "idle") { epc += $3; dur += $9; active_count++ }
-  } END {
-    if (active_count == 0) active_count = 1
-    printf "%.1f %.1f %d", rm/rm_count, epc/active_count, dur/active_count
-  }')
-
-  # Trend detection: compare last 3 vs prior sessions (requires 6+ data points)
-  trend="stable"
-  if [ "$line_count" -ge 6 ]; then
-    recent_3_misses=$(echo "$data_lines" | tail -3 | awk -F'|' '{s+=$2} END {printf "%.1f", s/3}')
-    prior_misses=$(echo "$data_lines" | head -n -3 | tail -4 | awk -F'|' '{s+=$2; c++} END {if(c>0) printf "%.1f", s/c; else printf "0.0"}')
-    trend=$(awk "BEGIN {
-      diff = $recent_3_misses - $prior_misses
-      if (diff > 0.5) print \"degrading\"
-      else if (diff < -0.5) print \"improving\"
-      else print \"stable\"
-    }")
-  fi
-
-  # M-2 fix: single awk pass to update all header fields atomically
-  awk -v trend="$trend" -v arm="$avg_rm" -v aepc="$avg_epc" -v adur="$avg_dur" '
-    /^trend_direction=/ { print "trend_direction=" trend; next }
-    /^avg_reasoning_misses=/ { print "avg_reasoning_misses=" arm; next }
-    /^avg_edits_per_commit=/ { print "avg_edits_per_commit=" aepc; next }
-    /^avg_duration_min=/ { print "avg_duration_min=" adur; next }
-    { print }
-  ' "$HEALTH_FILE" > "$HEALTH_FILE.tmp.$$" && mv "$HEALTH_FILE.tmp.$$" "$HEALTH_FILE"
-fi
+# v3's rolling-average recompute (trend_direction=/avg_*= header rewrite) is
+# GONE in v2 — trend is computed at READ time from v2 rows themselves
+# (hooks/scripts/lib/health-trend.sh), never stored back into the file.
 
 # v3's proposal-count warning (>50 ids => proposals_need_archiving flag) was
 # dropped here: the flag was write-only-dead (never read anywhere), and

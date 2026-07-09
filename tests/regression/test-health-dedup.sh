@@ -68,4 +68,36 @@ run_session_end "missing-field" > /dev/null
 hw=$(count_events health_written '' '' "$LOG")
 assert_eq "health_written_event_added" "1" "$hw"
 
+# Test 4 (v2 §6.1): per-session_id dedup REPLACES date-wide dedup — two
+# DIFFERENT sessions on the SAME calendar date each get their own row. This
+# is the exact opposite of the old v3 contract (same-date blocked a second
+# session outright); locks in the new behavior against regression.
+setup_test
+create_event_log "$_TEST_TMPDIR/.claude" "dedup-sidA" \
+  "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/a.ts" > /dev/null
+create_event_log "$_TEST_TMPDIR/.claude" "dedup-sidB" \
+  "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/b.ts" > /dev/null
+mkdir -p "$_TEST_TMPDIR/memory"
+echo "# Journal" > "$_TEST_TMPDIR/memory/$(date +%Y-%m-%d).md"
+run_session_end "dedup-sidA" > /dev/null
+run_session_end "dedup-sidB" > /dev/null
+health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
+assert_eq "per_sid_dedup_two_sids_same_date_two_rows" "2" "$(count_health_rows "$health_file")"
+
+# Test 5: a v2 row whose session_id is a PREFIX of another session_id must
+# not false-positive the dedup scan (the dedup key is "|sid|", pipe-bounded
+# on both sides — a substring match without those anchors would wrongly
+# treat "sess-1" as already-written once "sess-12" has a row).
+setup_test
+create_event_log "$_TEST_TMPDIR/.claude" "sess-12" \
+  "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/a.ts" > /dev/null
+create_event_log "$_TEST_TMPDIR/.claude" "sess-1" \
+  "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/b.ts" > /dev/null
+mkdir -p "$_TEST_TMPDIR/memory"
+echo "# Journal" > "$_TEST_TMPDIR/memory/$(date +%Y-%m-%d).md"
+run_session_end "sess-12" > /dev/null
+run_session_end "sess-1" > /dev/null
+health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
+assert_eq "sid_prefix_collision_still_two_rows" "2" "$(count_health_rows "$health_file")"
+
 end_suite

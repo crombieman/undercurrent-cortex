@@ -87,23 +87,70 @@ assert_eq "mode_set_defaults_to_normal_boot" "normal boot" "$(last_event mode_se
 assert_eq "threshold_set_defaults_to_15" "15" "$(last_event threshold_set "$NEW_LOG")"
 assert_eq "carry_over_age_zero_when_no_carryover" "0" "$(last_event carry_over_age "$NEW_LOG")"
 
-# --- Test 3: degrading health drives mode_set=cautious + tightened threshold ---
+# --- Test 3: v2 health rows with a rising fix_ratio median (last-5 vs
+# prior-5 delta > 0.15, spec §6.2 WAVE-4 TUNABLE) drive mode_set=cautious,
+# reason token "fix_ratio". Commit-threshold adjustment from avg_edits_per_commit
+# is GONE in v2 (that header field no longer exists) — threshold_set always
+# carries the flat default now. ---
 setup_opted_test
 sid="ss-cautious"
 HF="$_TEST_TMPDIR/.claude/cortex/health.local.md"
 mkdir -p "$(dirname "$HF")"
-cat > "$HF" << 'HEOF'
-trend_direction=degrading
-avg_reasoning_misses=1.5
-avg_edits_per_commit=30.0
-avg_duration_min=12
----
-2026-03-14|2|30|yes|0|0|0|1|12|3|high-churn|scoring
-HEOF
+create_health_file "$HF" \
+  "v2|2026-06-01|old-sid-1|2|5|0.00|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-02|old-sid-2|2|5|0.00|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-03|old-sid-3|2|5|0.00|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-04|old-sid-4|2|5|0.00|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-05|old-sid-5|2|5|0.00|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-06|old-sid-6|2|5|0.50|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-07|old-sid-7|2|5|0.50|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-08|old-sid-8|2|5|0.50|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-09|old-sid-9|2|5|0.50|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-10|old-sid-10|2|5|0.50|0|0|pass|10|3|iterating|src|0"
 run_session_start "$(mock_json "session_id=$sid")" > /dev/null
 NEW_LOG="$(_eio_week_dir)/${sid}.events.log"
-assert_eq "degrading_trend_sets_cautious_mode" "cautious trend" "$(last_event mode_set "$NEW_LOG")"
-assert_eq "high_epc_tightens_threshold" "5" "$(last_event threshold_set "$NEW_LOG")"
+assert_eq "rising_fix_ratio_sets_cautious_mode" "cautious fix_ratio" "$(last_event mode_set "$NEW_LOG")"
+assert_eq "threshold_set_flat_default_in_v2" "15" "$(last_event threshold_set "$NEW_LOG")"
+
+# --- Test 3b: the SAME rising fix_ratio pattern with fewer than 10 non-idle
+# v2 rows must NOT trigger cautious mode (spec §6.2: trend requires >=10
+# non-idle v2 rows; "no cautious mode from trend" below that). ---
+setup_opted_test
+sid="ss-not-enough-rows"
+HF="$_TEST_TMPDIR/.claude/cortex/health.local.md"
+mkdir -p "$(dirname "$HF")"
+create_health_file "$HF" \
+  "v2|2026-06-01|old-sid-1|2|5|0.00|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-02|old-sid-2|2|5|0.00|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-06|old-sid-6|2|5|0.50|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-07|old-sid-7|2|5|0.50|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-08|old-sid-8|2|5|0.50|0|0|pass|10|3|iterating|src|0"
+run_session_start "$(mock_json "session_id=$sid")" > /dev/null
+NEW_LOG="$(_eio_week_dir)/${sid}.events.log"
+assert_eq "below_10_rows_no_cautious_mode" "normal boot" "$(last_event mode_set "$NEW_LOG")"
+
+# --- Test 3c: legacy (non-v2) rows are counted for row totals elsewhere but
+# EXCLUDED from the >=10 gate — 5 legacy + 5 v2 (rising) rows still stays
+# below threshold on the v2-only count, so no cautious mode fires even though
+# the file has 10 data rows total. ---
+setup_opted_test
+sid="ss-legacy-excluded"
+HF="$_TEST_TMPDIR/.claude/cortex/health.local.md"
+mkdir -p "$(dirname "$HF")"
+create_health_file "$HF" \
+  "2026-05-01|0|1.0|true|0|0|0|0|10|1|focused|proj" \
+  "2026-05-02|0|1.0|true|0|0|0|0|10|1|focused|proj" \
+  "2026-05-03|0|1.0|true|0|0|0|0|10|1|focused|proj" \
+  "2026-05-04|0|1.0|true|0|0|0|0|10|1|focused|proj" \
+  "2026-05-05|0|1.0|true|0|0|0|0|10|1|focused|proj" \
+  "v2|2026-06-01|old-sid-1|2|5|0.00|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-02|old-sid-2|2|5|0.00|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-06|old-sid-6|2|5|0.50|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-07|old-sid-7|2|5|0.50|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-08|old-sid-8|2|5|0.50|0|0|pass|10|3|iterating|src|0"
+run_session_start "$(mock_json "session_id=$sid")" > /dev/null
+NEW_LOG="$(_eio_week_dir)/${sid}.events.log"
+assert_eq "legacy_rows_excluded_from_trend_gate" "normal boot" "$(last_event mode_set "$NEW_LOG")"
 
 # --- Test 4: current-session.id marker written ---
 setup_opted_test

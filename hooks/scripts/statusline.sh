@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$SCRIPT_DIR/lib/event-io.sh" || exit 0
+source "$SCRIPT_DIR/lib/health-trend.sh" || exit 0
 
 # Opt-in gate (spec §4.3): un-opted repos are fully inert. Directory
 # existence is NOT the signal — only the explicit sentinel file, written by
@@ -30,15 +31,11 @@ tests_icon="❌"; [ "$(count_events test_run)" -gt 0 ] && tests_icon="✅"
 
 docs_icon="❌"; [ "$(count_events docs_edit)" -gt 0 ] && docs_icon="✅"
 
-# --- Line 2 data: organism health ---
-trend="stable"
-avg_misses="0.0"
-if [ -f "$HEALTH_FILE" ]; then
-  trend=$(grep '^trend_direction=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r' || true)
-  trend="${trend:-stable}"
-  avg_misses=$(grep '^avg_reasoning_misses=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r' || true)
-  avg_misses="${avg_misses:-0.0}"
-fi
+# --- Line 2 data: organism health (v2: read-time trend from health-trend.sh,
+# spec §6.2 — no more trend_direction=/avg_reasoning_misses= header fields;
+# those are computed from v2 rows here, never stored). ---
+ht_result=$(ht_trend "$HEALTH_FILE")
+IFS='|' read -r ht_total ht_nonidle ht_verdict _ht_reason <<< "$ht_result"
 
 # Lessons count (## headings in tasks/lessons.md)
 lessons=0
@@ -62,27 +59,34 @@ mode=$(last_event mode_set)
 mode="${mode%% *}"
 mode="${mode:-normal}"
 
-heart="💛"; status="adapting"; arrow="→"
-case "$trend" in
-  improving) arrow="↗" ;;
-  degrading) arrow="↘" ;;
-  *) arrow="→" ;;
-esac
+# heart/status default to a neutral "adapting" — covers both a genuinely
+# stable trend AND "not enough data yet" (below the 10-non-idle-v2-row
+# threshold). v3's zero-avg-misses-implies-thriving default is gone with
+# self-report demotion; there's no equivalent v2 signal to substitute.
+heart="💛"; status="adapting"
 
 if [ "$mode" = "cautious" ]; then
   heart="🧡"; status="cautious"
-elif [ "$trend" = "degrading" ]; then
+elif [ "$ht_verdict" = "degrading" ]; then
   heart="❤️‍🩹"; status="stressed"
-elif [ "$trend" = "improving" ]; then
+elif [ "$ht_verdict" = "improving" ]; then
   heart="💚"; status="thriving"
+fi
+
+# Trailing trend segment: below the read threshold, show the honest raw
+# session count instead of an arrow/verdict pair (spec §6.2 — "📊 N sessions
+# tracked — trend at 10"; N = ht_total, which counts legacy rows too).
+if [ -z "$ht_verdict" ]; then
+  trend_segment="📊 ${ht_total} sessions tracked — trend at 10"
 else
-  # stable — thriving if zero misses, adapting otherwise
-  zero_misses=$(awk "BEGIN { print ($avg_misses == 0) }" 2>/dev/null || echo "0")
-  if [ "$zero_misses" = "1" ]; then
-    heart="💚"; status="thriving"
-  fi
+  arrow="→"
+  case "$ht_verdict" in
+    improving) arrow="↗" ;;
+    degrading) arrow="↘" ;;
+  esac
+  trend_segment="${arrow} ${ht_verdict}"
 fi
 
 # --- Output ---
 printf '✏️  %s edits · 📦 %s commits · 🧪%s · 📄%s\n' "$edits" "$commits" "$tests_icon" "$docs_icon"
-printf '%s %s │ 🧠 %s absorbed │ 🧬 %s mutations queued │ %s %s\n' "$heart" "$status" "$lessons" "$proposals" "$arrow" "$trend"
+printf '%s %s │ 🧠 %s absorbed │ 🧬 %s mutations queued │ %s\n' "$heart" "$status" "$lessons" "$proposals" "$trend_segment"
