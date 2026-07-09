@@ -150,4 +150,49 @@ result=$(echo "$json" | CORTEX_PROJECT_DIR_OVERRIDE="$_TEST_TMPDIR" \
 assert_eq "missing_journal_exits_zero" "0" "$rc"
 assert_json_valid "missing_journal_valid_json" "$result"
 
+# --- Per-language test detection (wave 4, spec §5.4/L6) ---
+
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "t-pytest")
+run_post_bash "t-pytest" "pytest tests/unit" > /dev/null
+assert_eq "pytest_appends_test_run" "pytest" "$(last_event test_run "$LOG")"
+
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "t-pymod")
+run_post_bash "t-pymod" "python3 -m pytest -x" > /dev/null
+assert_eq "python_m_pytest_appends_test_run" "pytest" "$(last_event test_run "$LOG")"
+
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "t-go")
+run_post_bash "t-go" "go test ./..." > /dev/null
+assert_eq "go_test_appends_test_run" "gotest" "$(last_event test_run "$LOG")"
+
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "t-cargo")
+run_post_bash "t-cargo" "cargo test --workspace" > /dev/null
+assert_eq "cargo_test_appends_test_run" "cargotest" "$(last_event test_run "$LOG")"
+
+# False positives: substrings and lookalike words must NOT fire
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "t-fp1")
+run_post_bash "t-fp1" "echo pytest-docs" > /dev/null
+assert_eq "pytest_substring_silent" "" "$(last_event test_run "$LOG")"
+
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "t-fp2")
+run_post_bash "t-fp2" "cat mypytest.log" > /dev/null
+assert_eq "pytest_wordpart_silent" "" "$(last_event test_run "$LOG")"
+
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "t-fp3")
+run_post_bash "t-fp3" "echo let us go testing later" > /dev/null
+assert_eq "go_prose_silent" "" "$(last_event test_run "$LOG")"
+
+# Per-project test_command config ERE wins (checked FIRST)
+setup_test
+set_config "$_TEST_TMPDIR/.claude" "test_command" "make check"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "t-custom")
+run_post_bash "t-custom" "make check" > /dev/null
+assert_eq "custom_test_command_appends_custom" "custom" "$(last_event test_run "$LOG")"
+
 end_suite

@@ -15,11 +15,29 @@ PROJECT_DIR="$(eio_project_dir)"
 command_str=$(printf '%s' "$INPUT" | extract_json_field "tool_input.command")
 [ -z "$command_str" ] && { printf '{}'; exit 0; }
 
-# --- Pattern: test commands ---
-if echo "$command_str" | grep -qE '(npm test|vitest|npx vitest)'; then
-  if [ -n "$EVENT_LOG" ] && [ -f "$EVENT_LOG" ]; then
-    append_event "test_run" "vitest"
-  fi
+# --- Pattern: test commands (per-language, spec §5.4/L6) ---
+# Event existence = pass (PostToolUse only fires for exit-0 commands — wave-0
+# pin), so no result flag is needed. Word-boundary anchors keep substrings
+# like "pytest-docs"/"mypytest"/"go testing" from false-positiving. A
+# per-project test_command ERE (config.local) is checked FIRST so projects
+# can override detection. Known accepted noise (same class as v3's bare
+# "vitest" substring): a command that MENTIONS a test invocation and exits 0
+# (e.g. `grep pytest file`) forges a pass — bounded, documented.
+test_framework=""
+custom_pattern=$(eio_config_get test_command)
+if [ -n "$custom_pattern" ] && echo "$command_str" | grep -qE "$custom_pattern"; then
+  test_framework="custom"
+elif echo "$command_str" | grep -qE '(npm test|vitest|npx vitest)'; then
+  test_framework="vitest"
+elif echo "$command_str" | grep -qE '(^|[;&|[:space:]])(python3?[[:space:]]+-m[[:space:]]+)?pytest([[:space:]]|$|[;&|])'; then
+  test_framework="pytest"
+elif echo "$command_str" | grep -qE '(^|[;&|[:space:]])go[[:space:]]+test([[:space:]]|$|[;&|])'; then
+  test_framework="gotest"
+elif echo "$command_str" | grep -qE '(^|[;&|[:space:]])cargo[[:space:]]+test([[:space:]]|$|[;&|])'; then
+  test_framework="cargotest"
+fi
+if [ -n "$test_framework" ] && [ -n "$EVENT_LOG" ] && [ -f "$EVENT_LOG" ]; then
+  append_event "test_run" "$test_framework"
 fi
 
 # --- Pattern: git commit (not amend) ---
