@@ -303,4 +303,64 @@ rc=0; out=$(bash -c 'set -euo pipefail; source "$1"; resolve_event_log "not vali
 assert_eq "resolve_malformed_json_no_crash" "0" "$rc"
 assert_eq "resolve_malformed_json_empty_log" "" "$out"
 
+# --- eio_intervention_report (wave 4, spec 6.3): follow-through scoring ---
+# Fixture logs live in their own sessions tree; the helper takes explicit dirs.
+IRD=$(mktemp -d)
+mkdir -p "$IRD/.claude/cortex/sessions/2026-W99"
+IRLOG1="$IRD/.claude/cortex/sessions/2026-W99/ir1.events.log"
+# commit_nudge followed: commit lands after 3 r-edits (window = 5)
+cat > "$IRLOG1" <<'IREOF'
+1700000001|session_start|2026-07-09T00:00:00Z m
+1700000002|intervention|commit_nudge
+1700000003|file_edit|r C:/p/a.ts
+1700000004|file_edit|r C:/p/b.ts
+1700000005|file_edit|r C:/p/c.ts
+1700000006|commit|abc1 fix: x
+IREOF
+IRLOG2="$IRD/.claude/cortex/sessions/2026-W99/ir2.events.log"
+# commit_nudge NOT followed: 5 r-edits exhaust the window before the commit
+# journal_checkpoint followed (journal_edit within 10 tool_calls)
+# re_edit_warning: one warned path re-edited twice (not followed), one once (followed)
+# codex_reminder with no codex_review (not followed)
+cat > "$IRLOG2" <<'IREOF'
+1700000001|session_start|2026-07-09T01:00:00Z m
+1700000002|intervention|commit_nudge
+1700000003|file_edit|r C:/p/a.ts
+1700000004|file_edit|r C:/p/b.ts
+1700000005|file_edit|r C:/p/c.ts
+1700000006|file_edit|r C:/p/d.ts
+1700000007|file_edit|r C:/p/e.ts
+1700000008|commit|abc2 feat: late
+1700000009|intervention|journal_checkpoint
+1700000010|tool_call|Bash
+1700000011|tool_call|Edit
+1700000012|journal_edit|memory/2026-07-09.md
+1700000013|intervention|re_edit_warning C:/p/hot.ts
+1700000014|file_edit|r C:/p/hot.ts
+1700000015|file_edit|r C:/p/hot.ts
+1700000016|intervention|re_edit_warning C:/p/warm.ts
+1700000017|file_edit|r C:/p/warm.ts
+1700000018|intervention|codex_reminder
+IREOF
+report=$(eio_intervention_report_dirs "$IRD/.claude/cortex/sessions")
+assert_contains "ir_commit_nudge_counts" "$report" "commit_nudge|2|1"
+assert_contains "ir_checkpoint_counts" "$report" "journal_checkpoint|1|1"
+assert_contains "ir_re_edit_counts" "$report" "re_edit_warning|2|1"
+assert_contains "ir_codex_counts" "$report" "codex_reminder|1|0"
+
+# cautious_mode: followed iff the session never went high-churn (no path 3+)
+IRLOG3="$IRD/.claude/cortex/sessions/2026-W99/ir3.events.log"
+cat > "$IRLOG3" <<'IREOF'
+1700000001|session_start|2026-07-09T02:00:00Z m
+1700000002|intervention|cautious_mode
+1700000003|file_edit|r C:/p/x.ts
+1700000004|file_edit|r C:/p/x.ts
+IREOF
+report=$(eio_intervention_report_dirs "$IRD/.claude/cortex/sessions")
+assert_contains "ir_cautious_followed" "$report" "cautious_mode|1|1"
+printf '1700000005|file_edit|r C:/p/x.ts
+' >> "$IRLOG3"
+report=$(eio_intervention_report_dirs "$IRD/.claude/cortex/sessions")
+assert_contains "ir_cautious_broken_by_churn" "$report" "cautious_mode|1|0"
+
 end_suite

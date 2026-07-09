@@ -210,6 +210,106 @@ eio_item_hash() {
   printf '%s' "$text" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | cksum | awk '{print $1}'
 }
 
+# --- Intervention follow-through scoring (wave 4, spec §6.3 / L2 / L11) ---
+# The feedback loop grades its own nudges: every intervention event is scored
+# against whether the nudged behavior actually followed, derived entirely from
+# the same append-only logs (no new files, no stored counters).
+#
+# Follow-through definitions (line order authoritative, per log):
+#   commit_nudge       followed iff a commit event lands while fewer than 5
+#                      r-flagged file_edits have elapsed since the nudge
+#                      ("within the next 5 material edits, or before session
+#                      end if fewer")
+#   journal_checkpoint followed iff a journal_edit lands within the next 10
+#                      tool_call events
+#   re_edit_warning    followed iff the warned path is edited FEWER than 2
+#                      more times this session
+#   cautious_mode      followed iff the session never goes high-churn (no
+#                      single path edited 3+ times across the whole log)
+#   codex_reminder     followed iff a codex_review event appears later in the
+#                      same session
+#
+# eio_intervention_report_dirs <sessions_dir> [days]
+# Scans <sessions_dir>/*/*.events.log with mtime within [days] (default 30);
+# echoes "kind|fired|followed" lines, sorted by kind. Kinds never fired are
+# omitted. Public wrapper below defaults to the project's own sessions dir.
+eio_intervention_report_dirs() {
+  local sessions_dir="$1" days="${2:-30}"
+  [ -d "$sessions_dir" ] || return 0
+  local cutoff_epoch now_epoch
+  now_epoch=$(date +%s)
+  cutoff_epoch=$(( now_epoch - days * 86400 ))
+
+  local f f_epoch
+  for f in "$sessions_dir"/*/*.events.log; do
+    [ -f "$f" ] || continue
+    f_epoch=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo "0")
+    if [ "$f_epoch" -gt 0 ] && [ "$f_epoch" -lt "$cutoff_epoch" ]; then
+      continue
+    fi
+    awk '
+      { sub(/\r$/, "") }
+      !/^[0-9]+\|[a-z_]+\|/ { next }
+      {
+        rest = substr($0, index($0, "|") + 1)
+        t = substr(rest, 1, index(rest, "|") - 1)
+        v = substr(rest, index(rest, "|") + 1)
+        sp = index(v, " ")
+        first = (sp > 0) ? substr(v, 1, sp - 1) : v
+        tail  = (sp > 0) ? substr(v, sp + 1)   : ""
+
+        if (t == "intervention") {
+          fired[first]++
+          if (first == "commit_nudge") { cn_n++; cn_left[cn_n] = 5; cn_hit[cn_n] = 0 }
+          else if (first == "journal_checkpoint") { jc_n++; jc_left[jc_n] = 10; jc_hit[jc_n] = 0 }
+          else if (first == "re_edit_warning") { rw_n++; rw_path[rw_n] = tail; rw_count[rw_n] = 0 }
+          # cautious_mode / codex_reminder resolve at END
+        }
+        else if (t == "file_edit") {
+          p = tail
+          edits[p]++
+          if (edits[p] > maxrep) maxrep = edits[p]
+          if (first == "r") {
+            for (i = 1; i <= cn_n; i++)
+              if (!cn_hit[i] && cn_left[i] > 0) cn_left[i]--
+          }
+          for (i = 1; i <= rw_n; i++)
+            if (p == rw_path[i]) rw_count[i]++
+        }
+        else if (t == "commit") {
+          for (i = 1; i <= cn_n; i++)
+            if (!cn_hit[i] && cn_left[i] > 0) cn_hit[i] = 1
+        }
+        else if (t == "tool_call") {
+          for (i = 1; i <= jc_n; i++)
+            if (!jc_hit[i] && jc_left[i] > 0) jc_left[i]--
+        }
+        else if (t == "journal_edit") {
+          for (i = 1; i <= jc_n; i++)
+            if (!jc_hit[i] && jc_left[i] > 0) jc_hit[i] = 1
+        }
+        else if (t == "codex_review") { cr_seen = 1 }
+      }
+      END {
+        for (i = 1; i <= cn_n; i++) if (cn_hit[i]) fol["commit_nudge"]++
+        for (i = 1; i <= jc_n; i++) if (jc_hit[i]) fol["journal_checkpoint"]++
+        for (i = 1; i <= rw_n; i++) if (rw_count[i] < 2) fol["re_edit_warning"]++
+        if (fired["cautious_mode"] > 0 && maxrep < 3) fol["cautious_mode"] = fired["cautious_mode"]
+        if (fired["codex_reminder"] > 0 && cr_seen)  fol["codex_reminder"]  = fired["codex_reminder"]
+        for (k in fired) printf "%s|%d|%d\n", k, fired[k], fol[k] + 0
+      }
+    ' "$f"
+  done | awk -F'|' '
+    { f[$1] += $2; w[$1] += $3 }
+    END { for (k in f) printf "%s|%d|%d\n", k, f[k], w[k] }
+  ' | sort
+}
+
+# eio_intervention_report [days] — project-default wrapper.
+eio_intervention_report() {
+  eio_intervention_report_dirs "$(_eio_sessions_dir)" "${1:-30}"
+}
+
 # eio_unresolved_items <file> [file...]
 # Echoes UNRESOLVED carry-over item texts, one per line, deduped (each item text
 # appears once even if carried in multiple logs), in first-seen order across the
