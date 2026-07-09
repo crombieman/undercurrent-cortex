@@ -372,4 +372,19 @@ setup_test
 result=$(echo '{"session_id":"totally-missing"}' | bash "$SANDBOX/hooks/scripts/stop-gate.sh" 2>/dev/null || true)
 assert_eq "missing_event_log_returns_empty" "{}" "$result"
 
+# --- Gate 3 honesty predicate (review F1): docs-only sessions never trip a
+# gate whose reason text says "source files", even when an ecosystem marker
+# (package.json) exists at the project root ---
+setup_test
+touch "$_TEST_TMPDIR/package.json"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "tests-gate-docs-only")
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/README.md"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/docs/guide.md"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/docs/api.md"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/docs/faq.md"
+echo "1700000100|commit|abc1234 docs: refresh" >> "$LOG"
+result=$(run_stop_gate "tests-gate-docs-only")
+assert_not_contains "gate3_docs_only_never_blocks" "$result" "\"decision\":\"block\""
+assert_not_contains "gate3_docs_only_no_reminder_either" "$result" "Tests not run"
+
 end_suite

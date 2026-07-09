@@ -159,9 +159,17 @@ if [ "$file_count" -gt 3 ]; then
       ecosystem_detected=true
     fi
 
-    if [ "$ecosystem_detected" = true ]; then
+    # Honesty predicate (review F1): the reason text says "source files", so at
+    # least one edited path must actually look like source — a 4-docs-file
+    # session in a repo that happens to contain package.json must not block.
+    source_edited=false
+    if echo "$files_modified" | grep -qiE '\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|sh|bash|c|h|cpp|hpp|java|rb|php|swift|kt)$'; then
+      source_edited=true
+    fi
+
+    if [ "$source_edited" = true ] && [ "$ecosystem_detected" = true ]; then
       add_failure "tests" "Tests not run after modifying source files"
-    else
+    elif [ "$source_edited" = true ]; then
       add_reminder "tests" "Tests not run after modifying source files"
     fi
   fi
