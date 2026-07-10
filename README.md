@@ -8,19 +8,20 @@ A Claude Code plugin that works like a **living organism** — 13 biological sys
 
 Imagine a second brain sitting alongside Claude that:
 
-- **Remembers** every file you edit, every commit you make, every tool call
+- **Remembers** every file you edit, every commit you make, every tool call — in an append-only per-session event log
 - **Blocks** dangerous operations before they happen (like using `now()` in a Postgres migration)
 - **Injects context** when you mention a topic — keyword-matched context files flow to where they're needed
 - **Nudges** you to commit when edits pile up, and validates commit message format
-- **Guards** session end so you don't walk away with uncommitted work or stale docs
+- **Guards** session end so you don't walk away with uncommitted or untested work
 - **Watches** the outside world — did CI fail? Did someone push to remote? Any open PRs?
-- **Heals** itself — corrupted state files get repaired automatically on boot
-- **Adapts** its behavior based on your recent session quality
+- **Heals** its own historical documents on boot (health history pruning, stale temp cleanup)
+- **Adapts** its behavior based on git-derived health metrics from your recent sessions
+- **Grades its own nudges** — every intervention is scored for follow-through, and chronic ignored nudges get flagged for retirement
 - **Proposes** its own improvements and waits for your approval
-- **Tracks patterns** across sessions — which files keep getting re-edited, what domains you focus on
+- **Tracks patterns** across sessions — which files keep getting re-edited, what domains you focus on (derived from the logs, no extra tracker files)
 - **Audits** your implementation plans before you start building (44 gates with Killer 7 universal core, risk-tiered depth, and domain-specific activation)
 
-All of this happens through bash hooks that fire at specific moments in your Claude Code session.
+All of this happens through bash hooks that fire at specific moments in your Claude Code session. It only activates in projects you explicitly opt in (see Activation).
 
 ---
 
@@ -30,8 +31,9 @@ All of this happens through bash hooks that fire at specific moments in your Cla
 
 - **Claude Code** (CLI or VS Code extension)
 - **Git Bash** on your PATH (Windows: comes with [Git for Windows](https://git-scm.com/))
-- **Python 3** on your PATH (needed for bootstrap and JSON manipulation)
 - **GitHub CLI** (`gh`) — optional, but needed for the Sensory system (CI/PR checks)
+
+No Python, no jq, no flock — the hook path is bash + POSIX awk only. (`jq`/`python3` are used as optional accelerators when present.)
 
 ### Installation
 
@@ -40,34 +42,29 @@ claude plugins marketplace add Undercurrent-Studio/undercurrent-cortex
 claude plugins install cortex@undercurrent-studio
 ```
 
-Restart Claude Code. On first session start, the plugin bootstraps all hook events into your global `~/.claude/settings.json` automatically.
+Restart Claude Code. All 7 hook events register natively from the plugin's `hooks.json` — nothing is written into your `~/.claude/settings.json`.
+
+### Activation (opt-in per project)
+
+Cortex is **fully inert until you opt a project in**: in a project without the sentinel file `.claude/cortex/enabled`, every hook exits immediately with `{}` — zero files created, zero state written.
+
+- **Opt in:** run `/cortex:setup` once in the project. It creates the sentinel and validates the workspace. A new session is required for activation.
+- **Grandfathering:** a project with real prior Cortex use (an existing `health.local.md` with data rows) gets the sentinel auto-created on first boot.
+- **Opt out:** delete `.claude/cortex/enabled` (or the whole `.claude/cortex/` directory).
 
 ### Hook Architecture
 
-Cortex uses a two-tier hook dispatch system due to a [known bug](https://github.com/anthropics/claude-code/issues/34573) where plugin `hooks.json` command hooks are unreliable for most events:
-
-| Tier | Location | Events | Why |
-|------|----------|--------|-----|
-| **hooks.json** | Plugin manifest | SessionStart only | Proven working; serves as the bootstrap's lifeline |
-| **Global settings.json** | `~/.claude/settings.json` | PreToolUse, PostToolUse, PreCompact, Stop, SessionEnd, UserPromptSubmit | Bootstrapped on every session start; the only location proven to reliably fire hooks |
-
-The `bootstrap-hooks.sh` script runs on every SessionStart and:
-1. Injects 6 hook events into `~/.claude/settings.json` (idempotent — skips if already correct)
-2. Replaces stale entries when the plugin version changes (path-aware)
-3. Cleans up orphan entries from old plugin versions (matches by script name pattern)
-4. Cleans up legacy entries from the old project-level `settings.local.json`
-
-All bootstrapped entries are tagged with `"_cortex_bootstrap": true` for identification.
+All 7 events live in the plugin's `hooks.json` and dispatch natively. The old two-tier settings.json bootstrap (a workaround for a since-fixed [platform bug](https://github.com/anthropics/claude-code/issues/34573)) is retired: `bootstrap-hooks.sh` now only *removes* leftover entries from old installs, and is itself scheduled for deletion in v4.2. Any stale settings.json entry from an old version is structurally inert — dispatchers detect the native registration via a per-session marker and no-op.
 
 ### Profiles
 
-Cortex supports three hook profiles that control which systems are active:
+Profiles control how assertive the organism is (all hooks fire regardless; the profile gates behavior inside them):
 
-| Profile | Events Injected | Use Case |
-|---------|----------------|----------|
-| `standard` (default) | All 6 events | Full organism — recommended for most projects |
-| `minimal` | PreToolUse, PostToolUse, SessionEnd only | Lightweight — enforcement + state tracking only |
-| `strict` | All 6 events + proposals auto-surfaced | Full organism with more aggressive adaptation |
+| Profile | Behavior |
+|---------|----------|
+| `standard` (default) | Full organism: all gates, sensory scan, feedback loop, social patterns. TDD guard is a once-per-session reminder |
+| `minimal` | Enforcement + state tracking only: no sensory/social/feedback analysis, no root-cause reminder |
+| `strict` | Everything in standard, plus pending proposals surfaced at boot and the TDD guard actually **denies** unprotected src edits |
 
 Set via `CORTEX_PROFILE` env var or `.claude/cortex/profile.local` file in your project.
 
@@ -82,10 +79,10 @@ Think of the plugin as a body. Each system has a specific job, and they work tog
 These fire every session and handle the basics.
 
 **1. Nervous System — State Tracking**
-Every edit, commit, and tool call gets counted in a session-scoped state file. The nervous system is how the organism "feels" what's happening — it's the raw sensory data that other systems read.
+Every edit, commit, test run, and tool call is appended to a per-session **append-only event log** (`epoch|event_type|value` lines in weekly buckets). Nothing is ever rewritten; every count the other systems use is derived from the log at read time. This is the structural fix for a whole class of state-corruption bugs — concurrent hooks can only append, and appends are atomic.
 
-*Where:* `post-dispatch.sh` (universal counter), `post-edit-dispatch.sh`, `post-bash-dispatch.sh`
-*State:* `edits_since_last_commit`, `commits_count`, `tool_calls_count`, `[files_modified]` section
+*Where:* `post-dispatch.sh` (tool counter), `post-edit-dispatch.sh` (file edits), `post-bash-dispatch.sh` (commits/tests), all through `lib/event-io.sh`
+*State:* `.claude/cortex/sessions/YYYY-WNN/{session-id}.events.log`
 
 **2. Immune System — Dangerous Operation Blocking**
 Before certain tools execute, the immune system checks if the operation is safe. If not, it blocks it with an explanation.
@@ -105,7 +102,7 @@ It also detects **decision language** ("I decided", "let's go with", "[decision]
 *Where:* `context-flow.sh` reads your prompt, matches keywords, injects from `context/` files
 
 **4. Skeletal System — Session Lifecycle**
-The skeleton that everything hangs on. Initializes state at session start, loads health history, runs an async codebase spot-check (drift detector), and writes a 12-field health row at session end.
+The skeleton that everything hangs on. Creates the session's event log at start (the only place a log is ever created), loads health history, runs an async codebase spot-check (drift detector), and writes a v2 health row at session end.
 
 *Where:* `session-start` (SessionStart hook), `drift-detector.sh` (async), `session-end-dispatch.sh` (SessionEnd hook)
 
@@ -121,25 +118,26 @@ When you create a new file, the plugin can inject a real example from the codeba
 *Where:* `pattern-template.sh` (PostToolUse on Write)
 
 **6. Endocrine System — Commit Enforcement**
-Nudges you to commit when edits accumulate. The threshold is dynamic — the Feedback system (System 12) can raise or lower it based on your recent session health. Also validates conventional commit format (`feat:`, `fix:`, `refactor:`, etc.) on `git commit`.
+Nudges you to commit when edits accumulate, and validates conventional commit format (`feat:`, `fix:`, `refactor:`, etc.) on `git commit`. Every nudge fire is recorded and scored for follow-through (System 12).
 
 *Where:* `post-edit-dispatch.sh` (edit counting + nudge), `post-bash-dispatch.sh` (commit format validation)
-*Default threshold:* 15 edits (adjustable by Feedback system)
+*Default threshold:* 15 edits since the last commit (override per project via `config.local` `commit_nudge_threshold`)
 
 **7. Memory System — Stop Gates**
-When Claude tries to end the session (Stop event), 7 gates must pass:
+When Claude tries to end the session (Stop event), the gates run. Gates are **honest about what they can verify**: only externally-verifiable obligations block; everything else is a non-blocking reminder riding the approve path.
 
-| Gate | What it checks | When it fires |
-|------|---------------|---------------|
-| 1 | Uncommitted changes | Always (with git status self-heal) |
-| 2 | `documentation.md` not updated after architectural changes | When 3+ files modified, touching scoring/pipeline/signals/etc. |
-| 3 | Tests not run after modifying TypeScript files | When 3+ files modified, touching `.ts`/`.tsx` |
-| 4 | Carry-over items from prior session not addressed | When carry-over exists in state |
-| 5 | Stale carry-over unresolved for 3+ sessions | When `carry_over_age >= 3` |
-| 6 | Root cause not documented after `fix:` commits | When session has `fix:` commits (standard/strict profiles) |
-| 7 | Decisions not captured after plan-mode session | When plan mode was used and commits were made |
+| Gate | What it checks | Class |
+|------|---------------|-------|
+| 1 | Uncommitted changes (event-derived count, cross-checked against real `git status`) | **Blocks** |
+| 3 | No test run since the *last source edit* (language-aware; only when a test ecosystem is detectable — otherwise reminds) | **Blocks** |
+| 4 | Carry-over items from prior session not addressed | **Blocks** |
+| 5 | Stale carry-over unresolved for 3+ sessions | **Blocks** |
+| 2 | Docs not updated after architectural changes (only if `architectural_patterns` is configured) | Reminds |
+| 6 | Root cause not documented after `fix:` commits | Reminds |
+| 7 | Decisions not captured after a plan-mode session | Reminds |
+| 8 | Codex review not dispatched on a substantial session (plan mode used, or 4+ files) | Reminds |
 
-If a gate fails, the session continues with a warning. After 2 consecutive blocks on the same gate, an escape hatch opens — sometimes you genuinely need to stop.
+Escape hatch: after 2 consecutive blocked stops, the 3rd force-approves — sometimes you genuinely need to stop.
 
 *Where:* `stop-gate.sh` (Stop hook)
 
@@ -183,19 +181,16 @@ Mid-session checks have a 5-minute cooldown.
 *Where:* `sensory-check.sh` (called by `session-start` and `context-flow.sh`)
 
 **10. Healing/Repair System — Self-Recovery**
-On every boot, the organism checks its own state files for damage and fixes what it finds:
+On every boot, the organism maintains its own *historical documents* (never the active event logs — those are append-only and untouchable):
 
 | Check | What it fixes |
 |-------|--------------|
-| Corrupted state file | Backs up and continues |
-| Out-of-range counters | Clamps to valid range |
-| Bloated file lists | Deduplicates when >200 entries |
-| Missing health header | Rebuilds summary fields |
-| Oversized health log | Prunes to last 100 rows |
+| Corrupted health header | Rebuilds it |
+| Oversized health history | Prunes >500 lines to the last 200 data rows |
 | Missing file separators | Adds `---` to proposals/decisions files |
 | Stale temp files | Deletes `*.tmp.*` files older than 60 minutes |
 | Old state backups | Removes backups older than 7 days |
-| Bloated cross-session file | Prunes entries older than 30 days |
+| Ancient week buckets | Removes `sessions/YYYY-WNN/` dirs older than 90 days (never the current week) |
 
 *Where:* `lib/validate-organism.sh` (sourced by `session-start`)
 
@@ -221,40 +216,59 @@ The Reproductive system (System 8) creates proposals. The Growth system manages 
 *Where:* `apply-proposal.sh` (called by `context-flow.sh` on approve/reject keywords)
 
 **12. Feedback Loop System — Health-Driven Behavior**
-The organism reads its own health history and adjusts behavior:
+The organism reads its own health history and adjusts behavior — and since v4, the metrics are **git-derived and externally verifiable** (fix-commit ratio, reworked files), never self-graded. Trend verdicts require at least 10 non-idle sessions of data and use medians, not means.
 
 | Health signal | Behavioral change |
 |--------------|------------------|
-| `trend_direction=degrading` | Switch to **cautious mode** — adds "plan before acting" reminders |
-| Session topology = `high-churn` | Switch to **cautious mode** |
-| High `avg_edits_per_commit` | Lower the commit nudge threshold (nudge sooner) |
-| Everything healthy | Normal mode, default thresholds |
+| Median fix-ratio rising (last 5 vs prior 5, by more than 0.15) | Switch to **cautious mode** — adds a "plan before acting" reminder on the first prompt |
+| Recurrent rework (3+ reworked files in 3 of the last 5 sessions) | Switch to **cautious mode** |
+| Everything healthy (or not enough data yet) | Normal mode, default thresholds |
 
-Cautious mode doesn't block anything — it adds a gentle reminder to think before acting.
+Cautious mode doesn't block anything — it injects one gentle reminder per session.
 
-*Where:* `session-start` computes mode + threshold from health file, `context-flow.sh` and `post-edit-dispatch.sh` read these values
+The loop also **grades itself**: every nudge it fires (commit nudge, re-edit warning, journal checkpoint, cautious-mode injection, Codex reminder) is logged as an `intervention` event and scored at read time for follow-through — did a commit actually land after the nudge? Any nudge fired 10+ times with under 20% follow-through is surfaced as a retirement candidate every 10th session. A feedback system that can't tell whether its feedback works is decoration; this one keeps receipts.
+
+*Where:* `session-start` computes mode from `lib/health-trend.sh`; `lib/event-io.sh` (`eio_intervention_report`) scores follow-through; `/status` and the statusline display the rates
 
 **13. Social/Communication System — Cross-Session Intelligence**
 Patterns that only emerge across multiple sessions:
 
-- **Domain tagging:** Each session gets a domain tag based on which subdirectory was most edited. Written as the 12th field in each health row.
-- **Cross-session file tracking:** Every file edited gets logged with its session count and last-edit date in `.claude/cortex/cross-session.local.md`.
+- **Domain tagging:** Each session gets a domain tag derived from the most-edited top-level directory (ties or fewer than 3 edits → `mixed`; none → `idle`). Written into the health row.
 - **Pattern detection** (runs at session start):
-  - *Domain clustering:* "Last 4 sessions were all scoring work" — surfaces focus patterns
-  - *Session length trends:* Compares recent session durations to historical average
-  - *Hot files:* Files edited in 5+ sessions get called out
+  - *Domain clustering:* "Last 3 of 5 sessions were all scoring work" — surfaces focus patterns
+  - *Session length trends:* Compares recent session durations
+  - *Hot files:* Files edited in 4+ distinct sessions get called out — **derived directly from the event logs at read time** (no tracker file to corrupt or prune)
 
-*Where:* `session-end-dispatch.sh` (writes domain tag + updates cross-session file) → `session-start` (reads and analyzes patterns)
+*Where:* `session-end-dispatch.sh` (writes the health row) → `session-start` + `lib/event-io.sh` (`eio_hot_files`) analyze at boot
 
 ---
 
+## Enforced vs Advisory — What Actually Blocks
+
+The honest ledger. "Blocks" means a hard deny or a blocked Stop; everything else is a reminder or derived information — valuable, but it will never stand in your way.
+
+| Mechanism | Class | Notes |
+|-----------|-------|-------|
+| Stop Gate 1 — uncommitted work | **Blocks** | Event-derived, cross-checked against `git status` |
+| Stop Gate 3 — tests since last source edit | **Blocks** | Only when a test ecosystem is detectable; otherwise reminds |
+| Stop Gates 4/5 — carry-over / stale carry-over | **Blocks** | Escape hatch after 2 consecutive blocks |
+| Migration linter — `now()` etc. in migrations | **Blocks** | PreToolUse deny |
+| Plan-file guard — overwriting an existing plan | **Blocks once** | Same-path retry allowed (deliberate rewrite) |
+| TDD guard (strict profile only) | **Blocks** | standard/minimal get a once-per-session reminder |
+| Stop Gates 2/6/7 — docs / root-cause / decisions | Reminds | Never emit a block |
+| Codex-review gate | Reminds | Promotion to blocking runs through follow-through data, not fiat |
+| Commit nudge, re-edit warning, journal checkpoint | Reminds | Each fire is scored for follow-through |
+| Cautious mode | Reminds | One injection per session |
+| Health trend, domain tags, hot files, intervention rates | Derives | Read-time computation from logs; drives nothing directly |
+
 ## Statusline
 
-The organism displays a two-line pulse at the start of every session and on-demand via `/status`:
+The organism displays its pulse at the start of every session and on-demand via `/status` — two lines, plus a third when intervention follow-through data exists:
 
 ```
 ✏️  3 edits · 📦 1 commits · 🧪✅ · 📄❌
 💚 thriving │ 🧠 62 absorbed │ 🧬 1 mutations queued │ ↗ improving
+🔁 interventions: nudge 4/12 · checkpoint 2/3
 ```
 
 ### Line 1 — Session Activity
@@ -270,13 +284,17 @@ The organism displays a two-line pulse at the start of every session and on-dema
 
 | Element | Meaning |
 |---------|---------|
-| 💚 `thriving` | Organism is healthy — zero recent reasoning misses, stable trend |
-| 💛 `adapting` | Normal operation — some misses detected, learning from them |
-| 🧡 `cautious` | Feedback system activated cautious mode (high churn or degrading trend) |
+| 💚 `thriving` | Git-derived trend is improving (fix-ratio falling, no rework spikes) |
+| 💛 `adapting` | Normal operation — stable trend, or not enough data yet |
+| 🧡 `cautious` | Feedback system activated cautious mode (rising fix-ratio or recurrent rework) |
 | ❤️‍🩹 `stressed` | Health trend is degrading — extra care needed |
 | 🧠 `N absorbed` | Total lessons in `tasks/lessons.md` (cumulative knowledge base) |
 | 🧬 `N mutations queued` | Pending evolution proposals waiting for approval |
-| ↗/→/↘ `trend` | Health trend direction: `improving`, `stable`, or `degrading` |
+| ↗/→/↘ `trend` | Trend verdict from ≥10 sessions of git-derived medians; below that it shows the honest raw count: `📊 6 sessions tracked — trend at 10` |
+
+### Line 3 — Intervention Follow-Through (only when data exists)
+
+`followed/fired` per nudge kind over the last 30 days — `nudge 4/12` means the commit nudge fired 12 times and was actually followed by a commit 4 times. The feedback loop grading its own advice.
 
 ---
 
@@ -317,17 +335,17 @@ Premortem, Show the Math, Source Evidence, Success Criteria, Blast Radius, Lesso
 
 Gate definitions live in `context/plan-audit-gates.md`. AI-ism taxonomy (87 patterns + 8 anti-patterns) in `context/ai-ism-taxonomy.md`. Meta-principles and research evidence in `context/plan-audit-reference.md`.
 
-### 7 Hook Events
+### 7 Hook Events (all native in `hooks.json`)
 
-| Event | Source | Script | What |
-|-------|--------|--------|------|
-| SessionStart | hooks.json | session-start | Init state, load health, healing, sensory, feedback, social, bootstrap |
-| PreToolUse | bootstrap | pre-dispatch.sh | Routes to migration-linter + plan-file-guard + tdd-guard |
-| PostToolUse | bootstrap | post-dispatch.sh | Universal tool counter + routes to edit/bash tracking + patterns |
-| UserPromptSubmit | bootstrap | context-flow.sh | Context injection, decision detection, cautious mode |
-| Stop | bootstrap | stop-gate.sh | 7-gate session end (includes root cause documentation + decision capture) |
-| PreCompact | bootstrap | pre-compact.sh | Preserve carry-over |
-| SessionEnd | bootstrap | session-end-dispatch.sh | Health metrics, domain tag, cross-session tracking |
+| Event | Script | What |
+|-------|--------|------|
+| SessionStart | session-start (+ async drift-detector.sh) | Create event log, healing, carry-over, sensory, feedback, statusline |
+| PreToolUse | pre-dispatch.sh | Routes to migration-linter + plan-file-guard + tdd-guard |
+| PostToolUse | post-dispatch.sh | Tool counter + routes to edit/bash tracking + pattern templates |
+| UserPromptSubmit | context-flow.sh | Context injection, decision detection, cautious-mode injection |
+| Stop | stop-gate.sh | Honest stop gates (4 blocking + 4 reminders + escape hatch) |
+| PreCompact | pre-compact.sh | Preserve carry-over |
+| SessionEnd | session-end-dispatch.sh | Health row v2 (git-derived metrics, domain tag) |
 
 ### 4 Agents
 
@@ -355,16 +373,18 @@ Gate definitions live in `context/plan-audit-gates.md`. AI-ism taxonomy (87 patt
 
 ### State Files
 
-All state files live in `.claude/cortex/` (gitignored):
+All state lives in `.claude/cortex/` (gitignored):
 
 | Path | Purpose |
 |------|---------|
-| `cortex/sessions/YYYY-WNN/{session-id}.local.md` | Session state: edit counts, commit counts, tool calls, mode, thresholds, file list. Organized in weekly buckets. |
-| `cortex/health.local.md` | Historical: one row per session with 12 metrics. Rolling averages computed on read. |
+| `cortex/sessions/YYYY-WNN/{session-id}.events.log` | **The source of truth**: per-session append-only event log (`epoch\|event_type\|value`), weekly buckets. Every count is derived from it at read time — no stored counters anywhere |
+| `cortex/health.local.md` | Historical: one v2 row per session (git-derived metrics + labeled self-report column). Trends computed on read |
 | `cortex/proposals.local.md` | Pending/applied/rejected evolution proposals |
 | `cortex/decisions.local.md` | Decision journal entries with metadata (category, reversibility, confidence) |
-| `cortex/cross-session.local.md` | File edit frequency across sessions |
-| `cortex/current-session.id` | Pointer to active session state file (ensures correct resolution) |
+| `cortex/config.local` | Optional per-project vocabulary: `architectural_patterns`, `docs_file`, `lessons_file`, `test_command`, `commit_nudge_threshold` |
+| `cortex/enabled` | The opt-in sentinel (created by `/cortex:setup`) — without it every hook is inert |
+| `cortex/native-hooks.ok` | Per-session marker proving native registration (suppresses stale settings.json entries) |
+| `cortex/current-session.id` | Active session id, for read-only surfaces (`/status`) |
 | `cortex/profile.local` | Hook profile override (minimal/standard/strict) |
 
 ### 12 Context Files
@@ -375,14 +395,14 @@ All state files live in `.claude/cortex/` (gitignored):
 
 | File | Keywords |
 |------|----------|
-| deploy-readiness.md | deploy, vercel, production, ship, go live |
+| deploy-readiness.md | deploy, vercel, go live, push to prod, production, ship it |
 | testing-conventions.md | vitest, test suite, write test, add test, run test, fix test, coverage |
-| math-review.md | formula, statistics, probability, monte carlo, sigmoid, z-score, distribution, likelihood, half-life |
-| typescript-discipline.md | typescript, type error, tsc, nouncheckedindexedaccess, type guard |
-| python-patterns.md | python, pyproject.toml, pytest, django, flask, fastapi, poetry, ruff, mypy |
-| go-patterns.md | golang, go.mod, goroutine, cobra, fiber |
-| rust-patterns.md | rustc, cargo.toml, lifetime, tokio, serde, clippy, rust-lang |
-| synthesis-memory.md | collaboration pattern, workflow pattern, synthesis |
+| math-review.md | formula, statistics, probability, monte carlo, sigmoid, z-score, distribution, likelihood, half-life, ornstein, mean reversion, … |
+| typescript-discipline.md | typescript, type error, tsc, nouncheckedindexedaccess, type guard, as never, use client |
+| python-patterns.md | python, pyproject.toml, venv, pytest, django, flask, fastapi, poetry, ruff, mypy, pydantic |
+| go-patterns.md | golang, go.mod, goroutine, go.sum, cobra, fiber |
+| rust-patterns.md | rustc, cargo.toml, lifetime, tokio, async-std, serde, clippy, rust-lang |
+| synthesis-memory.md | collaboration pattern, workflow pattern, synthesis, curate memory, how we work, … |
 
 **Plan-audit reference** (loaded via `@context/` when plan-audit skill fires):
 
@@ -423,15 +443,15 @@ To create a domain pack:
 
 ## Test Suite
 
-28 test scripts organized by type:
+41 test scripts (900+ assertions) organized by type, run on every push against **ubuntu and windows** CI legs:
 
 ```text
 tests/
   run-all.sh                              # Test runner
-  unit/                                   # 6 tests — state-io, json-extract, escape-json, validate-organism, lint-antipatterns, event-io
-  integration/                            # 17 tests — one per hook script + profiles + migration v3.7
-  edge/                                   # 2 tests — empty stdin, Windows paths
-  regression/                             # 3 tests — health dedup, pipefail glob, concurrent appends
+  unit/                                   # 9 — event-io, state-io, json-extract, escape-json, validate-organism, lint scans, fixtures, mocks, hooks.json contract
+  integration/                            # 26 — one per hook script + opt-in gate, native marker, dual-fire, old-cache overlap, hook contract, profiles
+  edge/                                   # 1 — Windows paths
+  regression/                             # 5 — health dedup, pipefail glob, concurrent appends, session-start perf budget, timeout contract
   lib/                                    # 3 shared helpers — fixtures, mocks, test framework
 ```
 
@@ -447,42 +467,45 @@ cortex/
     plugin.json                            # Plugin manifest (name, version)
     marketplace.json                       # Marketplace listing metadata
   hooks/
-    hooks.json                             # SessionStart only (bootstrap lifeline)
-    session-start                          # SessionStart: init + healing + sensory + feedback + social + bootstrap
+    hooks.json                             # ALL 7 events, native registration
+    session-start                          # SessionStart: event-log creation + healing + carry-over + sensory + feedback
     scripts/
-      bootstrap-hooks.sh                   # Injects 6 events into ~/.claude/settings.json
+      bootstrap-hooks.sh                   # Cleanup-only (removes old settings.json entries) — deleted in v4.2
       pre-dispatch.sh                      # PreToolUse dispatcher
-      post-dispatch.sh                     # PostToolUse dispatcher (universal counter + routing)
-      post-edit-dispatch.sh                # Edit tracking + commit nudge
-      post-bash-dispatch.sh                # Bash tracking + commit format validation
+      post-dispatch.sh                     # PostToolUse dispatcher (tool counter + routing)
+      post-edit-dispatch.sh                # Edit tracking + commit nudge + re-edit warning
+      post-bash-dispatch.sh                # Commit/test/codex detection + commit format validation
       migration-linter.sh                  # Block now() in migrations
-      plan-file-guard.sh                   # Block plan overwrites
-      tdd-guard.sh                         # Block implementation before tests
+      plan-file-guard.sh                   # Block plan overwrites (once per path)
+      tdd-guard.sh                         # TDD reminder (deny on strict profile only)
       context-flow.sh                      # Keyword context + decisions + cautious mode
       drift-detector.sh                    # Async codebase spot-checks
       pattern-template.sh                  # Convention exemplar injection
-      stop-gate.sh                         # 7-gate session end
+      stop-gate.sh                         # Honest stop gates (blocking + reminders)
       sensory-check.sh                     # External awareness (git, CI, PRs)
       apply-proposal.sh                    # Proposal approve/reject lifecycle
       pre-compact.sh                       # Preserve carry-over on context compaction
-      session-end-dispatch.sh              # Health metrics + domain tag + cross-session tracking
-      statusline.sh                        # Organism statusline renderer
+      session-end-dispatch.sh              # Health row v2 (git-derived metrics + domain tag)
+      statusline.sh                        # Organism statusline renderer (2-3 lines)
       lib/
-        escape-json.sh                     # JSON string escaping
+        escape-json.sh                     # JSON string escaping (control-char safe)
         json-extract.sh                    # Lightweight JSON field extraction
-        state-io.sh                        # read_field/write_field/read_section/append_to_section
-        validate-organism.sh               # Healing system: 9 self-repair checks
+        event-io.sh                        # THE state layer: append_event + read-time derivations
+        health-trend.sh                    # Read-time trend medians from v2 health rows
+        state-io.sh                        # LEGACY read-only surface — shrinks further in v4.2
+        validate-organism.sh               # Healing: historical-document maintenance
   skills/             # 16 skill directories
   commands/           # 10 slash commands
   agents/             # conversation-analyzer + deep-dive + code-reviewer + memory-synthesis
   context/            # 12 context files (8 keyword-matched + 3 plan-audit reference + 1 index)
-  tests/              # 28 test scripts + 3 helpers (run-all.sh)
+  tests/              # 41 test scripts + 3 helpers (run-all.sh); ubuntu + windows CI
 ```
 
 ---
 
 ## Version History
 
+- **4.0.0** — The event-log rearchitecture (v4 redesign complete). State is an append-only per-session event log — the mutable state file, its `write_field` sed primitive (two proven corruption bugs), and the lost-update race are structurally gone; every count derives from the log at read time. All 7 hook events register natively from `hooks.json` (settings.json bootstrap retired; stale entries inert via a per-session marker). Activation is opt-in per project (`/cortex:setup` → `.claude/cortex/enabled`; un-opted repos are fully inert). Health rows v2 carry git-derived metrics (fix-ratio, rework, real test results) — self-reported tags demoted to a labeled column that drives nothing; trend verdicts need ≥10 sessions and use medians. Gates are honest: verify-where-cheap blocks (uncommitted, tests-after-last-source-edit, carry-over), everything else reminds. The feedback loop scores its own nudges for follow-through and flags chronic ignored ones for retirement. Per-language test detection (vitest/pytest/go/cargo + config override). Undercurrent-specific vocabulary moved to per-project `config.local`. Cross-session hot files derived from logs (tracker file retired). Windows + ubuntu CI. Lint scans keep the mutation idioms dead. **v4.2 deletion calendar:** `bootstrap-hooks.sh`, the v3.7 migration chain, the legacy `*.local.md` carry-over reader, and opt-in grandfathering all get deleted in 4.2.
 - **3.13.2** — Plan-audit v1.0: layered 44-gate architecture (was 18 flat gates). Irreducible Core (3 questions on every plan). Killer 7 universal gates. Risk-tiered depth (Tier S/A/B/C). 26 new gates covering idempotency, race conditions, partial failure, blast radius, observability, type coercion, and more. 5 existing gates enhanced (mandatory arithmetic, source evidence, data exposure, staleness windows, full-universe scaling). 3 new context files: `plan-audit-gates.md` (44 gate definitions), `ai-ism-taxonomy.md` (87 patterns + 8 anti-patterns; earlier README versions misstated 122), `plan-audit-reference.md` (15 meta-principles + research evidence).
 - **3.12.1** — Session-start statusline now displays model metadata (model name, reasoning effort, context window) as a third line.
 - **3.12.0** — Fix TDD guard deny format (strict mode was silently broken — wrong JSON format for Claude Code hook API). Sync all documentation counts and versions. Fix 5 stale references from v3.7 migration. Add missing version frontmatter to graph and validate-refs skills. Clarify superpowers as optional integration.
@@ -523,7 +546,12 @@ These are **two separate operations** — `plugins update` only checks the cache
 
 ## Uninstalling
 
-To cleanly remove Cortex and all its artifacts, run `/uninstall` in any Claude Code session with the plugin still installed. This guides you through removing bootstrap entries from `~/.claude/settings.json`, project-level state files, and the plugin itself.
+Simple since v4 — there is no settings.json surgery to do:
+
+1. `claude plugins uninstall cortex@undercurrent-studio`
+2. Per project, delete `.claude/cortex/` (state) — or just delete the `enabled` sentinel to keep the history but deactivate.
+
+`/cortex:uninstall` walks you through it, including cleanup of any bootstrap-era leftovers from pre-4.0 installs.
 
 ---
 
