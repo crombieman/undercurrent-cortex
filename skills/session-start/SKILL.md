@@ -1,7 +1,7 @@
 ---
 name: session-start
 description: This skill should be used when starting or resuming a session — reads memory, creates journal, surfaces carry-over and domain-relevant lessons.
-version: 0.4.1
+version: 0.5.0
 ---
 
 # Session Start
@@ -35,6 +35,7 @@ version: 0.4.1
    - React/Next.js/components → surface frontend lessons
    - SEC/EDGAR/XBRL → surface SEC lessons
    Surface all matches. Do not limit to "last 5."
+   - **Surfaced-lesson logging**: when you surface lessons, log their stable IDs (`L-YYYYMMDD-nn`, or the heading if un-ID'd) in today's journal entry — the curate-memory retirement pass counts these mentions to decide which lessons still pay rent (spec §7.2).
    - **Domain workflow loading**: Check each workflow in `_index.md` — if its scope tags match the current task domain, read the full detail file from `~/.cortex/synthesis/workflows/`. Example: task involves design or brainstorming → load `design-through-conversation.md`. Task involves audit or code-quality → load `probe-then-fix.md`.
 
 ## If touching architecture, schema, or pipeline

@@ -1,7 +1,7 @@
 ---
 name: plan-audit
 description: This skill should be used before calling ExitPlanMode or finalizing any implementation plan — 44-gate layered audit with Killer 7 universal core, risk-tiered depth, and domain-specific activation. Catches silent failures, data integrity bugs, security gaps, math errors, architecture conflicts, idempotency violations, race conditions, blast radius issues, and AI-isms. Non-negotiable before any plan approval.
-version: 1.0.1
+version: 1.1.0
 ---
 
 # Plan Audit v1.0
@@ -174,6 +174,16 @@ Each gate produces either a **finding** (something discovered) or **"clear with 
 "Clear with evidence" can be one line: `"row count: 3361 * 1 = 3361 < 50K — within limits."`
 
 On audit completion, dispatch a Codex review of the audited plan when the Codex CLI is available (pre-authorized — no need to ask; dispatch and result-harvest are two separate steps). The stop-gate Codex reminder is the structural backstop; this mention is the belt.
+
+## Gate Rent (spec §7.2 — gates pay for their place)
+
+After each audit, append ONE line per evaluated gate to `docs/plan-audit-stats.md` (append-only; create with a `# Plan-Audit Gate Tallies` header if missing):
+
+```
+YYYY-MM-DD|<plan-slug>|gate-<n>|<finding|clear>
+```
+
+When writing the stats, also scan the file: **any gate with 0 findings across 20+ audits is flagged as a demotion candidate** in your audit output (the user decides — never silently drop a gate). Surfaced lessons consulted during Gate 6 (Lessons Check) are logged to today's journal by their stable IDs (`L-YYYYMMDD-nn`) so the curate-memory retirement pass can count them.
 
 ## Justified Exclusion
 

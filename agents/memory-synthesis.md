@@ -88,6 +88,12 @@ Every ~30 sessions (or when explicitly requested), write a collaboration evoluti
 - Flag research topics with 3+ individual files that haven't been summarized
 - Flag session archives > 6 months old for purge
 
+### 12. Lesson retirement pass (spec §7.2 — candidates only, NEVER auto-delete)
+If the project has a lessons file (default `tasks/lessons.md`; check `.claude/cortex/config.local` `lessons_file` for an override), evaluate each lesson's rent:
+- **Surfacing evidence**: a lesson counts as "surfaced" when its stable ID (`L-YYYYMMDD-nn`) or heading appears in a journal entry (`memory/*.md`, including `memory/archive/`), or as a `lesson_surfaced` event in `.claude/cortex/sessions/*/*.events.log` (grep the raw logs — the ID is the event value).
+- **Retirement candidates**: (a) never surfaced in the last 90 days of journals/logs, or (b) surfaced 10+ times with no reinforcement note added to the lesson body in that span (a lesson that keeps getting surfaced but never updated is either internalized or noise).
+- Output a flagged-candidates list with the evidence for each (last-surfaced date, surface count). The user decides; you never delete or archive a lesson yourself.
+
 ## Rules — what you NEVER do
 - Delete entries
 - Archive entries without explicit user approval
