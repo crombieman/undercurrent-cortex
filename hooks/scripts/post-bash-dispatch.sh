@@ -52,7 +52,14 @@ if echo "$command_str" | grep -qE '(^|[;&|[:space:]])codex([[:space:]]|$)|codex-
 fi
 
 # --- Pattern: git commit (not amend) ---
-if echo "$command_str" | grep -qE '^[[:space:]]*git[[:space:]]+commit[[:space:]]'; then
+# Word-boundary form, NOT line-anchored: compound commands (`git add -A &&
+# git commit -m ...`) are how commits are usually phrased in practice, and the
+# old `^git commit` anchor silently dropped every one of them — the session's
+# edits-since-commit never reset and (post-T5) every commit_nudge in such a
+# session scored as not-followed. Quotes are excluded from the boundary class,
+# so `grep 'git commit' ...` stays out; for everything else the HEAD-recency
+# guard below is the actual gatekeeper.
+if echo "$command_str" | grep -qE '(^|[;&|[:space:]])git[[:space:]]+commit([[:space:]]|$)'; then
   if ! echo "$command_str" | grep -q '\-\-amend'; then
     # Recency guard: the anchored regex above matches any command that STARTS
     # with `git commit `, including invocations that create no new commit — e.g.
@@ -60,11 +67,13 @@ if echo "$command_str" | grep -qE '^[[:space:]]*git[[:space:]]+commit[[:space:]]
     # commit that a hook rejected. In those cases HEAD is stale (it points at an
     # earlier commit) and recording it would attribute an old SHA to this
     # session. So only append the commit event when HEAD's committer timestamp is
-    # within 60s of now — proof a commit was actually just created. (The anchored
-    # `^…git commit` regex never matches the compound form `git add . && git
-    # commit`, so that case is out of scope here.) `edits_since_last_commit`
-    # derives via the `commit` anchor — no reset write needed (mapping-table
-    # resolution).
+    # within 60s of now — proof a commit was actually just created. Accepted
+    # residual (bounded): an exit-0 command containing an unquoted `git commit`
+    # token that does NOT commit (e.g. --dry-run) within 60s of a real commit
+    # duplicates that commit's event — harmless to the commit-anchored
+    # derivations, at worst +1 on the health row's commit count.
+    # `edits_since_last_commit` derives via the `commit` anchor — no reset
+    # write needed (mapping-table resolution).
     if [ -n "$EVENT_LOG" ] && [ -f "$EVENT_LOG" ]; then
       commit_ts=$(git -C "${PROJECT_DIR}" log -1 --format=%ct 2>/dev/null || echo "")
       if [[ "$commit_ts" =~ ^[0-9]+$ ]]; then

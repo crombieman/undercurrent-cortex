@@ -81,6 +81,31 @@ assert_eq "commit_event_count_increments" "2" "$count"
 assert_contains "commit_event_has_short_sha" "$result" "$sha"
 assert_contains "commit_event_has_subject" "$result" "feat: add fresh commit"
 
+# Test 5b: compound `git add ... && git commit` ALSO appends the commit event.
+# The line-anchored form silently dropped every compound-command commit — the
+# session's edits-since-commit never reset, and (worse, post-T5) every
+# commit_nudge in such a session scored as not-followed, poisoning the
+# follow-through stats. The HEAD-recency guard, not the anchor, is what keeps
+# non-committing invocations out.
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "commit-compound" \
+  "1700000001|commit|abc1234 feat: prior commit")
+make_commit "feat: compound form commit"
+sha=$(git -C "$_TEST_TMPDIR" rev-parse --short HEAD)
+run_post_bash "commit-compound" "git add -A && git commit -m feat-test" > /dev/null
+count=$(count_events commit '' '' "$LOG")
+assert_eq "compound_commit_event_appended" "2" "$count"
+assert_contains "compound_commit_event_sha" "$(list_events commit "$LOG")" "$sha"
+
+# Test 5c: a QUOTED "git commit" inside another command (grep, echo "...") does
+# not fire — the boundary class excludes quote characters
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "commit-prose" \
+  "1700000001|commit|abc1234 feat: prior commit")
+make_commit "feat: fresh head but not a commit command"
+run_post_bash "commit-prose" "grep -rn 'git commit' docs/" > /dev/null
+assert_eq "quoted_git_commit_does_not_fire" "1" "$(count_events commit '' '' "$LOG")"
+
 # Test 6: git commit --amend does not append a commit event (existing count unchanged)
 setup_test
 LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "commit-amend" \
