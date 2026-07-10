@@ -50,7 +50,12 @@ if [ "$NATIVE" != true ]; then
 fi
 
 resolve_event_log "$INPUT"
+# Field-name compat: the platform docs name this field "prompt"; older
+# payloads (and this repo's fixtures) use "user_prompt". The wave-0 schema
+# pin never captured a UserPromptSubmit payload, so accept both shapes —
+# whichever is present wins (a payload only ever carries one).
 PROMPT=$(printf '%s' "$INPUT" | extract_json_field "user_prompt")
+[ -z "$PROMPT" ] && PROMPT=$(printf '%s' "$INPUT" | extract_json_field "prompt")
 
 # Graceful degradation
 [ -z "$PROMPT" ] && { printf '{}'; exit 0; }

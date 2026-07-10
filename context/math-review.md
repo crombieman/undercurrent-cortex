@@ -1,4 +1,4 @@
-keywords: formula,statistics,probability,monte carlo,sigmoid,logarithm,exponential decay,half-life,normalization,regression,interpolation,z-score,zscore,standard deviation,stddev,variance,distribution,likelihood,ou,gbm
+keywords: formula,statistics,probability,monte carlo,sigmoid,logarithm,exponential decay,half-life,normalization,regression,interpolation,z-score,zscore,standard deviation,stddev,variance,distribution,likelihood,ornstein,mean reversion,gbm
 # Math Review Context
 
 **Hand-derive before implementing**: Write out the algebra on paper (or in comments) before translating to code. Verify each step — sign errors and off-by-one mistakes are the #1 source of silent math bugs.

@@ -241,4 +241,40 @@ setup_test
 result=$(run_context_flow "I'm calling it for today")
 assert_contains "wrapup_calling_it" "$result" "session-end"
 
+# ============================================================
+# REAL CONTEXT DIR KEYWORD LINT
+# ============================================================
+
+# Test 33: no keyword in any REAL context file is shorter than 3 chars.
+# Defends the 2026-07-10 live failure: math-review.md shipped keyword "ou"
+# (Ornstein-Uhlenbeck), which substring-matches "about"/"you"/"would" — with
+# first-match-wins and alphabetical scan order, one 2-char keyword hijacked
+# context injection for essentially every English prompt. Substring matching
+# makes any 1-2 char keyword a guaranteed collision; lint the artifacts, not
+# just sampled prompts.
+setup_test
+short_keywords=$(
+  for f in "$PLUGIN_ROOT"/context/*.md; do
+    first_line=$(head -1 "$f")
+    case "$first_line" in
+      keywords:*)
+        printf '%s' "${first_line#keywords:}" | tr ',' '\n' \
+          | sed 's/^ *//; s/ *$//' \
+          | awk -v file="$(basename "$f")" 'length($0) > 0 && length($0) < 3 { printf "%s:%s ", file, $0 }'
+        ;;
+    esac
+  done
+)
+assert_eq "no_short_keywords_in_real_context_dir" "" "$short_keywords"
+
+# Test 34: harness field-name compat — a payload carrying "prompt" (current
+# platform field name per Claude Code docs) injects the same as "user_prompt".
+# The wave-0 schema pin only captured PostToolUse; UserPromptSubmit's field
+# was never pinned empirically, so context-flow must accept both shapes.
+setup_test
+create_event_log "$_TEST_TMPDIR/.claude" "ctx-prompt-field" > /dev/null
+json=$(mock_json "prompt=fix the goroutine leak" "session_id=ctx-prompt-field")
+result=$(echo "$json" | bash "$SANDBOX/hooks/scripts/context-flow.sh" 2>/dev/null || true)
+assert_contains "prompt_field_name_injects" "$result" "Go patterns"
+
 end_suite

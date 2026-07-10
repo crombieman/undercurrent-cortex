@@ -1,5 +1,5 @@
 {
   "name": "cortex",
-  "version": "3.19.1",
+  "version": "3.19.2",
   "description": "Compounding intelligence system for Claude Code - session management, health tracking, context injection, and adaptive learning"
 }

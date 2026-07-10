@@ -188,6 +188,38 @@ result=$(run_synth)
 assert_file_contains "malformed_reinforced_no_crash" "$_TEST_TMPDIR/collab.md" "[unconfirmed]"
 
 # ============================================================
+# PERFORMANCE REGRESSION TEST
+# ============================================================
+
+# Test 16b: Real-size file completes inside the session-start budget.
+# Defends the exact 2026-07-10 live failure: per-line `echo | grep` / `sed` /
+# `date` spawns inside while-read loops took ~98s on a 988-line collaboration.md
+# under Windows MSYS (spawn tax ~15-25ms/process), blowing session-start's
+# hooks.json timeout and cancelling the ENTIRE context injection every boot.
+# Fixture is ~600 lines; the awk single-pass implementation finishes in <1s on
+# every platform. The 8s ceiling is a >10x margin for slow CI runners while
+# still being unreachable by any per-line-spawn implementation on the Windows
+# CI leg (~60s there; a per-line revert also degrades ubuntu into the seconds).
+setup_test
+perf_file="$_TEST_TMPDIR/collab.md"
+{
+  echo "# Collaboration Patterns"
+  awk -v stale="$stale_date" -v today="$today" 'BEGIN {
+    for (i = 1; i <= 75; i++) {
+      tag = (i % 2 == 0) ? " [unconfirmed]" : ""
+      d = (i % 3 == 0) ? stale : today
+      printf "\n### Pattern%03d%s\nDescription of pattern %d.\n\n- **Reinforced**: %d (%s)\n- **Last validated**: %s\n- **Scope**: testing\n", i, tag, i, (i % 4), d, d
+    }
+  }'
+} > "$perf_file"
+SECONDS=0
+run_synth "$perf_file" > /dev/null
+perf_elapsed=$SECONDS
+perf_verdict="within-8s"
+[ "$perf_elapsed" -gt 8 ] && perf_verdict="took-${perf_elapsed}s"
+assert_eq "perf_real_size_within_budget" "within-8s" "$perf_verdict"
+
+# ============================================================
 # GOLDEN OUTPUT TEST
 # ============================================================
 

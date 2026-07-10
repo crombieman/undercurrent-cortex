@@ -132,7 +132,11 @@ if len(ss_hooks) == 2:
     report("sessionstart_entry_no_native_flag",
            not session_start_entry.get("command", "").rstrip().endswith("--native"),
            session_start_entry.get("command", ""))
-    report("sessionstart_entry_timeout_15", session_start_entry.get("timeout") == 15,
+    # 30s, not 15: session-start legitimately needs ~6s warm (sensory network
+    # calls + spawn tax) and boot-time contention (parallel sessions, cold gh,
+    # AV scan of a fresh cache) can multiply that. At 15s it was cancelled at
+    # real boots (2026-07-10), losing the entire context injection.
+    report("sessionstart_entry_timeout_30", session_start_entry.get("timeout") == 30,
            str(session_start_entry.get("timeout")))
     report("sessionstart_entry_async_false", session_start_entry.get("async") is False,
            str(session_start_entry.get("async")))

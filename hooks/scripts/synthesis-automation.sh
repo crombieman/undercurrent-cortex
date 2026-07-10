@@ -4,6 +4,14 @@
 # Always exits 0 — failures must not kill the session-start hook.
 #
 # Env: COLLAB_FILE — path to collaboration.md (required)
+#
+# PERF CONTRACT: this runs inside session-start's sync hook budget. Both
+# scans MUST be single-pass awk — per-line `echo | grep`/`sed`/`date` spawns
+# inside while-read loops cost ~15-25ms/process under Windows MSYS and took
+# ~98s on a 988-line collaboration.md (2026-07-10 live failure: blew the
+# hooks.json timeout, cancelling session-start's entire context injection).
+# Guarded by perf_real_size_within_budget in test-synthesis-automation.sh.
+# awk constructs must stay mawk-compatible (no mktime/gensub — ubuntu CI).
 
 set +e  # Must not fail on grep/sed misses
 
@@ -15,31 +23,28 @@ fi
 synthesis_actions=""
 
 # --- Promotion sweep ---
-# Single pass: find [unconfirmed] headings, check Reinforced count, collect line numbers
+# Single awk pass: find [unconfirmed] headings whose following **Reinforced**
+# count (before the next heading/section break) is >= 2. Emits the qualifying
+# heading line numbers comma-joined, e.g. "12,47,".
+promote_lines=$(awk '
+  /^### .* \[unconfirmed\]/ { hl = NR; next }
+  hl > 0 && /\*\*Reinforced\*\*:/ {
+    line = $0
+    sub(/.*\*\*Reinforced\*\*: /, "", line)
+    sub(/[^0-9].*/, "", line)
+    if (line + 0 >= 2) printf "%d,", hl
+    hl = 0
+    next
+  }
+  hl > 0 && (/^###/ || /^## / || /^---/) { hl = 0 }
+' "$COLLAB_FILE" 2>/dev/null)
+
 promoted_count=0
-promote_lines=""
-current_heading_line=0
+if [ -n "$promote_lines" ]; then
+  promoted_count=$(printf '%s' "$promote_lines" | awk -F',' '{print NF - 1}')
+fi
 
-line_num=0
-while IFS= read -r line; do
-  line_num=$((line_num + 1))
-  if echo "$line" | grep -q '^### .* \[unconfirmed\]'; then
-    current_heading_line=$line_num
-  elif [ "$current_heading_line" -gt 0 ]; then
-    if echo "$line" | grep -q '\*\*Reinforced\*\*:'; then
-      count=$(echo "$line" | sed 's/.*\*\*Reinforced\*\*: \([0-9]*\).*/\1/')
-      if [ "${count:-0}" -ge 2 ]; then
-        promote_lines="${promote_lines}${current_heading_line},"
-        promoted_count=$((promoted_count + 1))
-      fi
-      current_heading_line=0
-    elif echo "$line" | grep -q '^###\|^## \|^---'; then
-      current_heading_line=0
-    fi
-  fi
-done < "$COLLAB_FILE"
-
-if [ "$promoted_count" -gt 0 ] && [ -n "$promote_lines" ]; then
+if [ "${promoted_count:-0}" -gt 0 ]; then
   temp_file="${COLLAB_FILE}.tmp.$$"
   # Build sed expression: for each qualifying line, remove " [unconfirmed]"
   sed_expr=""
@@ -62,30 +67,36 @@ if [ "$promoted_count" -gt 0 ] && [ -n "$promote_lines" ]; then
 fi
 
 # --- Staleness check ---
-stale_warnings=""
+# Single awk pass over the (possibly just-updated) file. Date age is computed
+# with pure integer arithmetic (days-from-civil algorithm) — no mktime (gawk
+# extension, absent in mawk) and no per-line `date` spawns.
 now_epoch=$(date +%s)
-last_heading=""
-
-while IFS= read -r line; do
-  if echo "$line" | grep -q '^### '; then
-    last_heading=$(echo "$line" | sed 's/^### //' | sed 's/ \[unconfirmed\]//')
-  fi
-  if echo "$line" | grep -q '\*\*Last validated\*\*:'; then
-    val_date=$(echo "$line" | sed 's/.*\*\*Last validated\*\*: \([0-9-]*\).*/\1/')
-    if [ -n "$val_date" ]; then
-      # Dual fallback: GNU date || BSD date
-      val_epoch=$(date -d "$val_date" +%s 2>/dev/null \
-        || date -j -f "%Y-%m-%d" "$val_date" +%s 2>/dev/null \
-        || echo "0")
-      if [ "$val_epoch" -gt 0 ]; then
-        age_days=$(( (now_epoch - val_epoch) / 86400 ))
-        if [ "$age_days" -ge 30 ]; then
-          stale_warnings="${stale_warnings}  - \"${last_heading}\" (${val_date}, ${age_days}d ago)"$'\n'
-        fi
-      fi
-    fi
-  fi
-done < "$COLLAB_FILE"
+stale_warnings=$(awk -v now_epoch="$now_epoch" '
+  function civil_days(y, m, d,   era, yoe, doy, doe) {
+    if (m <= 2) y--
+    era = int((y >= 0 ? y : y - 399) / 400)
+    yoe = y - era * 400
+    doy = int((153 * (m > 2 ? m - 3 : m + 9) + 2) / 5) + d - 1
+    doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+    return era * 146097 + doe - 719468
+  }
+  BEGIN { now_days = int(now_epoch / 86400) }
+  /^### / {
+    h = $0
+    sub(/^### /, "", h)
+    sub(/ \[unconfirmed\]/, "", h)
+    last_heading = h
+  }
+  /\*\*Last validated\*\*:/ {
+    d = $0
+    sub(/.*\*\*Last validated\*\*: /, "", d)
+    sub(/[^0-9-].*/, "", d)
+    if (d ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) {
+      age = now_days - civil_days(substr(d,1,4)+0, substr(d,6,2)+0, substr(d,9,2)+0)
+      if (age >= 30) printf "  - \"%s\" (%s, %dd ago)\n", last_heading, d, age
+    }
+  }
+' "$COLLAB_FILE" 2>/dev/null)
 
 if [ -n "$stale_warnings" ]; then
   synthesis_actions="${synthesis_actions:+${synthesis_actions}$'\n'}Stale collaboration patterns (>30d since last validated):"$'\n'"${stale_warnings}"
