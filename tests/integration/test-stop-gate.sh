@@ -387,6 +387,52 @@ result=$(run_stop_gate "tests-gate-docs-only")
 assert_not_contains "gate3_docs_only_never_blocks" "$result" "\"decision\":\"block\""
 assert_not_contains "gate3_docs_only_no_reminder_either" "$result" "Tests not run"
 
+# --- Gate 3 after-anchor (Codex W4 review I-1, spec §5.1): the gate requires
+# a test_run AFTER the last source file_edit — a stale early-session test run
+# must not satisfy it forever ---
+
+# Stale test_run before a later source edit → blocks
+setup_test
+touch "$_TEST_TMPDIR/package.json"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "g3-stale-testrun")
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/a.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/b.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/c.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/d.ts"
+echo "1700009001|test_run|vitest" >> "$LOG"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/core.ts"
+result=$(run_stop_gate "g3-stale-testrun")
+assert_contains "gate3_stale_test_run_blocks" "$result" "Tests not run after modifying source files"
+assert_contains "gate3_stale_test_run_decision_block" "$result" "\"decision\":\"block\""
+
+# test_run after the last source edit → Gate 3 quiet (Gate 1 anchored quiet too)
+setup_test
+touch "$_TEST_TMPDIR/package.json"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "g3-fresh-testrun")
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/a.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/b.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/c.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/d.ts"
+echo "1700009001|commit|abc1234 feat: four files" >> "$LOG"
+echo "1700009002|test_run|vitest" >> "$LOG"
+result=$(run_stop_gate "g3-fresh-testrun")
+assert_not_contains "gate3_fresh_test_run_quiet" "$result" "Tests not run"
+
+# A NON-source edit (docs) after the test run must not re-trip the gate —
+# the anchor is the last SOURCE file_edit, not the last file_edit of any kind
+setup_test
+touch "$_TEST_TMPDIR/package.json"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "g3-docs-after-tests")
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/a.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/b.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/c.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/d.ts"
+echo "1700009001|test_run|vitest" >> "$LOG"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/README.md"
+echo "1700009002|commit|abc1234 feat: all done" >> "$LOG"
+result=$(run_stop_gate "g3-docs-after-tests")
+assert_not_contains "gate3_docs_edit_after_tests_does_not_retrip" "$result" "Tests not run"
+
 # --- NEW Codex-review gate (spec §5.6, D7/L9, T6): reminder-only ---
 
 # Trigger A: plan_mode used, no codex_review → approve path carries the

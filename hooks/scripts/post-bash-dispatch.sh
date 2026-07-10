@@ -27,7 +27,7 @@ test_framework=""
 custom_pattern=$(eio_config_get test_command)
 if [ -n "$custom_pattern" ] && echo "$command_str" | grep -qE "$custom_pattern"; then
   test_framework="custom"
-elif echo "$command_str" | grep -qE '(npm test|vitest|npx vitest)'; then
+elif echo "$command_str" | grep -qE '(^|[;&|[:space:]])(npm[[:space:]]+test|npx[[:space:]]+vitest|vitest)([[:space:]]|$|[;&|])'; then
   test_framework="vitest"
 elif echo "$command_str" | grep -qE '(^|[;&|[:space:]])(python3?[[:space:]]+-m[[:space:]]+)?pytest([[:space:]]|$|[;&|])'; then
   test_framework="pytest"
@@ -45,7 +45,7 @@ fi
 # the companion runtime file. Either the dispatch step or the harvest step
 # counts — both prove the review loop was exercised this session. Consumed by
 # the stop-gate Codex reminder and the codex_reminder follow-through scoring.
-if echo "$command_str" | grep -qE '(^|[;&|[:space:]])codex([[:space:]]|$)|codex-companion\.mjs'; then
+if echo "$command_str" | grep -qE '(^|[;&|[:space:]])codex([[:space:]]|$)|(^|[;&|[:space:]])node[[:space:]][^;&|]*codex-companion\.mjs'; then
   if [ -n "$EVENT_LOG" ] && [ -f "$EVENT_LOG" ]; then
     append_event "codex_review" "cli"
   fi
@@ -82,8 +82,17 @@ if echo "$command_str" | grep -qE '(^|[;&|[:space:]])git[[:space:]]+commit([[:sp
         [ "$delta" -lt 0 ] && delta=$(( -delta ))
         if [ "$delta" -le 60 ]; then
           short_sha=$(git -C "${PROJECT_DIR}" rev-parse --short HEAD 2>/dev/null || echo "")
-          subject=$(git -C "${PROJECT_DIR}" log -1 --pretty=format:"%s" 2>/dev/null || echo "")
-          [ -n "$short_sha" ] && append_event "commit" "${short_sha} ${subject}"
+          # Dedup against the last recorded commit event (spec §3.3 "HEAD
+          # verified changed"): a matched command that created no NEW commit
+          # (dry-run, unquoted mention) inside the recency window would
+          # otherwise re-log the previous commit AFTER newer file_edits and
+          # falsely reset Gate 1's edits-since-commit anchor.
+          last_commit_sha=$(last_event commit)
+          last_commit_sha="${last_commit_sha%% *}"
+          if [ -n "$short_sha" ] && [ "$short_sha" != "$last_commit_sha" ]; then
+            subject=$(git -C "${PROJECT_DIR}" log -1 --pretty=format:"%s" 2>/dev/null || echo "")
+            append_event "commit" "${short_sha} ${subject}"
+          fi
         fi
       fi
     fi

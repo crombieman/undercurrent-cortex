@@ -137,17 +137,22 @@ if [ "$file_count" -gt 3 ]; then
     fi
   fi
 
-  # Gate 3: Tests not run after modifying source files (language-neutral,
+  # Gate 3: Tests not run AFTER the last source edit (language-neutral,
   # locked D5: verified-blocking when a test ecosystem is detectable this
   # session, else demotes to reminder — replaces the old TypeScript-only
   # `.ts`/`.tsx` regex, which falsely implied test-running was a TS-specific
   # obligation). Detection order: (b) an edited path already looks like a
   # test file, (c) a project language/test marker file exists at the project
   # root, (d) a per-project test_command override is configured. The
-  # >3-unique-files threshold above is the noise guard; this check itself
-  # stays a plain whole-session `count_events test_run` (no after-anchor).
-  tests_run_count=$(count_events test_run)
-  if [ "$tests_run_count" -eq 0 ]; then
+  # >3-unique-files threshold above is the noise guard. The check compares
+  # LINE positions per spec §5.1 ("no test_run event after the last source
+  # file_edit") — a stale early-session test run must not satisfy the gate
+  # forever (Codex W4 review I-1). Only r-flagged (committable) source paths
+  # anchor it, which also subsumes the review-F1 honesty predicate: no source
+  # edit ⇒ position 0 ⇒ gate silent.
+  last_src_edit_line=$(eio_last_line_of file_edit '^r .*\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|sh|bash|c|h|cpp|hpp|java|rb|php|swift|kt)$')
+  last_test_run_line=$(eio_last_line_of test_run)
+  if [ "$last_src_edit_line" -gt 0 ] && [ "$last_test_run_line" -lt "$last_src_edit_line" ]; then
     ecosystem_detected=false
     if echo "$files_modified" | grep -qiE '\.(test|spec)\.(ts|tsx|js|jsx)$|__tests__/|_test\.(go|py|rs)$|test_.*\.py$'; then
       ecosystem_detected=true
@@ -159,17 +164,9 @@ if [ "$file_count" -gt 3 ]; then
       ecosystem_detected=true
     fi
 
-    # Honesty predicate (review F1): the reason text says "source files", so at
-    # least one edited path must actually look like source — a 4-docs-file
-    # session in a repo that happens to contain package.json must not block.
-    source_edited=false
-    if echo "$files_modified" | grep -qiE '\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|sh|bash|c|h|cpp|hpp|java|rb|php|swift|kt)$'; then
-      source_edited=true
-    fi
-
-    if [ "$source_edited" = true ] && [ "$ecosystem_detected" = true ]; then
+    if [ "$ecosystem_detected" = true ]; then
       add_failure "tests" "Tests not run after modifying source files"
-    elif [ "$source_edited" = true ]; then
+    else
       add_reminder "tests" "Tests not run after modifying source files"
     fi
   fi

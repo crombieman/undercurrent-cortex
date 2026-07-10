@@ -220,6 +220,44 @@ LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "t-custom")
 run_post_bash "t-custom" "make check" > /dev/null
 assert_eq "custom_test_command_appends_custom" "custom" "$(last_event test_run "$LOG")"
 
+# --- JS/TS test detection is word-boundary anchored like the other languages
+# (Codex W4 review I-2): word-part lookalikes must not forge a test_run ---
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "t-fp-vitest")
+run_post_bash "t-fp-vitest" "./mvitest run" > /dev/null
+assert_eq "mvitest_wordpart_silent" "" "$(last_event test_run "$LOG")"
+
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "t-fp-npmtesting")
+run_post_bash "t-fp-npmtesting" "npm testing something" > /dev/null
+assert_eq "npm_testing_wordpart_silent" "" "$(last_event test_run "$LOG")"
+
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "t-vitest-anchored")
+run_post_bash "t-vitest-anchored" "npx vitest run --coverage" > /dev/null
+assert_eq "npx_vitest_still_fires" "vitest" "$(last_event test_run "$LOG")"
+
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "t-npmtest-anchored")
+run_post_bash "t-npmtest-anchored" "npm test" > /dev/null
+assert_eq "npm_test_still_fires" "vitest" "$(last_event test_run "$LOG")"
+
+# --- Commit event dedup against the last recorded commit (Codex W4 review
+# I-3, spec §3.3 "HEAD verified changed"): a matched command that created no
+# NEW commit within the recency window must not re-log the previous commit —
+# re-logging it after newer file_edits would falsely reset Gate 1's
+# edits-since-commit anchor ---
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "commit-dedup")
+make_commit "feat: dedup base"
+run_post_bash "commit-dedup" "git commit -m feat-test" > /dev/null
+assert_eq "dedup_first_commit_logged" "1" "$(count_events commit '' '' "$LOG")"
+run_post_bash "commit-dedup" "echo git commit please" > /dev/null
+assert_eq "unquoted_mention_does_not_relog_same_sha" "1" "$(count_events commit '' '' "$LOG")"
+make_commit "feat: dedup second"
+run_post_bash "commit-dedup" "git commit -m feat-test-2" > /dev/null
+assert_eq "genuinely_new_commit_still_logged" "2" "$(count_events commit '' '' "$LOG")"
+
 # --- Codex review detection (spec §5.6, D7/L9, T6) ---
 
 # Bare `codex` CLI invocation → codex_review event, value "cli"
@@ -251,5 +289,12 @@ setup_test
 LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "mycodex")
 run_post_bash "mycodex" "./mycodex status" > /dev/null
 assert_eq "mycodex_no_event" "0" "$(count_events codex_review '' '' "$LOG")"
+
+# A search/prose MENTION of the companion file must NOT fire (Codex W4 review
+# M-1): only a node invocation shape counts as exercising the review loop
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "codex-mention")
+run_post_bash "codex-mention" "rg codex-companion.mjs docs/" > /dev/null
+assert_eq "companion_mention_no_event" "0" "$(count_events codex_review '' '' "$LOG")"
 
 end_suite

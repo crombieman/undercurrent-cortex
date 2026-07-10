@@ -363,6 +363,51 @@ printf '1700000005|file_edit|r C:/p/x.ts
 report=$(eio_intervention_report_dirs "$IRD/.claude/cortex/sessions")
 assert_contains "ir_cautious_broken_by_churn" "$report" "cautious_mode|1|0"
 
+# journal_checkpoint 10th-tool boundary (Codex W4 review I-4): the journal
+# Write's OWN tool_call is logged before its journal_edit, so a journal edit
+# landing on exactly the 10th tool call IS "within the next 10 tool events"
+# and must score as followed; the 11th is out.
+IRB=$(mktemp -d)
+mkdir -p "$IRB/.claude/cortex/sessions/2026-W99"
+jc_log() {
+  local name="$1" tools="$2"
+  local f="$IRB/.claude/cortex/sessions/2026-W99/${name}.events.log"
+  printf '1700000001|session_start|2026-07-10T00:00:00Z m\n' > "$f"
+  printf '1700000002|intervention|journal_checkpoint\n' >> "$f"
+  local i
+  for i in $(seq 1 "$tools"); do
+    printf '%s|tool_call|Edit\n' "$((1700000002 + i))" >> "$f"
+  done
+  printf '1700000099|journal_edit|memory/2026-07-10.md\n' >> "$f"
+}
+jc_log "jc-tenth" 10
+report=$(eio_intervention_report_dirs "$IRB/.claude/cortex/sessions")
+assert_contains "ir_checkpoint_followed_on_exact_tenth_tool" "$report" "journal_checkpoint|1|1"
+rm "$IRB/.claude/cortex/sessions/2026-W99/jc-tenth.events.log"
+jc_log "jc-eleventh" 11
+report=$(eio_intervention_report_dirs "$IRB/.claude/cortex/sessions")
+assert_contains "ir_checkpoint_not_followed_on_eleventh_tool" "$report" "journal_checkpoint|1|0"
+
+# codex_reminder follow-through requires a codex_review LATER than the
+# reminder (spec §6.3 "later in the same session"; Codex W4 review M-2) — a
+# review that happened BEFORE the reminder fired must not count.
+IRC=$(mktemp -d)
+mkdir -p "$IRC/.claude/cortex/sessions/2026-W99"
+cat > "$IRC/.claude/cortex/sessions/2026-W99/cr-before.events.log" <<'IREOF'
+1700000001|session_start|2026-07-10T00:00:00Z m
+1700000002|codex_review|cli
+1700000003|intervention|codex_reminder
+IREOF
+report=$(eio_intervention_report_dirs "$IRC/.claude/cortex/sessions")
+assert_contains "ir_codex_review_before_reminder_not_followed" "$report" "codex_reminder|1|0"
+cat > "$IRC/.claude/cortex/sessions/2026-W99/cr-before.events.log" <<'IREOF'
+1700000001|session_start|2026-07-10T00:00:00Z m
+1700000002|intervention|codex_reminder
+1700000003|codex_review|cli
+IREOF
+report=$(eio_intervention_report_dirs "$IRC/.claude/cortex/sessions")
+assert_contains "ir_codex_review_after_reminder_followed" "$report" "codex_reminder|1|1"
+
 # Kinds never fired are OMITTED — a log with zero intervention events yields an
 # EMPTY report, not spurious "cautious_mode|0|0"/"codex_reminder|0|0" rows.
 # (Regression: awk instantiates array keys on mere reference — fired["x"] in a

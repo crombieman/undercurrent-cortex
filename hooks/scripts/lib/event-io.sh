@@ -135,6 +135,30 @@ count_events() {
   ' "$file"
 }
 
+# eio_last_line_of <type> [value_ere] [file]
+# Echoes the 1-based LINE NUMBER of the most recent event of <type> whose
+# value matches [value_ere] (POSIX ERE against the LOWERCASED value; empty =
+# any value); echoes 0 if none. Line order is the authoritative event order
+# (spec §3.2), so callers compare positions — e.g. stop-gate Gate 3's "no
+# test_run after the last source file_edit" — never epochs.
+eio_last_line_of() {
+  local type="$1" vre="${2:-}" file="${3:-$EVENT_LOG}"
+  [ -n "$file" ] && [ -f "$file" ] || { echo 0; return 0; }
+  TYPE="$type" VRE="$vre" awk '
+    { sub(/\r$/, "") }
+    !/^[0-9]+\|[a-z_]+\|/ { next }
+    {
+      rest = substr($0, index($0, "|") + 1)
+      t = substr(rest, 1, index(rest, "|") - 1)
+      if (t != ENVIRON["TYPE"]) next
+      v = substr(rest, index(rest, "|") + 1)
+      if (ENVIRON["VRE"] != "" && tolower(v) !~ ENVIRON["VRE"]) next
+      last = NR
+    }
+    END { print last + 0 }
+  ' "$file"
+}
+
 # last_event <type> [file] — value of the most recent event of type (last-wins).
 last_event() {
   local type="$1" file="${2:-$EVENT_LOG}"
@@ -281,14 +305,21 @@ eio_intervention_report_dirs() {
             if (!cn_hit[i] && cn_left[i] > 0) cn_hit[i] = 1
         }
         else if (t == "tool_call") {
+          # Floor at -1, not 0: the journal Write LOGS ITS OWN tool_call before
+          # its journal_edit, so after exactly 10 tools jc_left is 0 and the
+          # edit is still WITHIN the window; only an 11th tool (-1) is out.
           for (i = 1; i <= jc_n; i++)
-            if (!jc_hit[i] && jc_left[i] > 0) jc_left[i]--
+            if (!jc_hit[i] && jc_left[i] > -1) jc_left[i]--
         }
         else if (t == "journal_edit") {
           for (i = 1; i <= jc_n; i++)
-            if (!jc_hit[i] && jc_left[i] > 0) jc_hit[i] = 1
+            if (!jc_hit[i] && jc_left[i] >= 0) jc_hit[i] = 1
         }
-        else if (t == "codex_review") { cr_seen = 1 }
+        else if (t == "codex_review") {
+          # Only a review LATER than the reminder counts (spec §6.3): the flag
+          # arms only once a codex_reminder has already fired in this log.
+          if ("codex_reminder" in fired) cr_after = 1
+        }
       }
       END {
         for (i = 1; i <= cn_n; i++) if (cn_hit[i]) fol["commit_nudge"]++
@@ -298,7 +329,7 @@ eio_intervention_report_dirs() {
         # INSTANTIATES the key, so a zero-intervention log would emit spurious
         # "x|0|0" rows (contract: kinds never fired are omitted).
         if (("cautious_mode" in fired) && maxrep < 3) fol["cautious_mode"] = fired["cautious_mode"]
-        if (("codex_reminder" in fired) && cr_seen)   fol["codex_reminder"]  = fired["codex_reminder"]
+        if (("codex_reminder" in fired) && cr_after)  fol["codex_reminder"]  = fired["codex_reminder"]
         for (k in fired) printf "%s|%d|%d\n", k, fired[k], fol[k] + 0
       }
     ' "$f"
