@@ -40,6 +40,17 @@ if [ -n "$test_framework" ] && [ -n "$EVENT_LOG" ] && [ -f "$EVENT_LOG" ]; then
   append_event "test_run" "$test_framework"
 fi
 
+# --- Pattern: Codex review invocation (spec §5.6, D7/L9) ---
+# `codex` as a standalone word (boundary form keeps codexify/mycodex out), OR
+# the companion runtime file. Either the dispatch step or the harvest step
+# counts — both prove the review loop was exercised this session. Consumed by
+# the stop-gate Codex reminder and the codex_reminder follow-through scoring.
+if echo "$command_str" | grep -qE '(^|[;&|[:space:]])codex([[:space:]]|$)|codex-companion\.mjs'; then
+  if [ -n "$EVENT_LOG" ] && [ -f "$EVENT_LOG" ]; then
+    append_event "codex_review" "cli"
+  fi
+fi
+
 # --- Pattern: git commit (not amend) ---
 if echo "$command_str" | grep -qE '^[[:space:]]*git[[:space:]]+commit[[:space:]]'; then
   if ! echo "$command_str" | grep -q '\-\-amend'; then

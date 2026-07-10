@@ -228,6 +228,23 @@ if [ "$commits_count_g6" -gt 0 ]; then
   fi
 fi
 
+# NEW Codex-review gate (spec §5.6, D7/L9): reminder-only — the promotion
+# path to blocking runs through the §6.3 follow-through data, never a
+# hardcoded block here. Trigger: substantial session (plan mode used OR >= 4
+# distinct r-flagged files) with no codex_review event this session. The
+# intervention event is appended at most once per session so the fired
+# denominator counts sessions nudged, not Stop attempts.
+r_distinct=$(list_events file_edit | grep '^r ' | sed 's/^r //' | sort -u | wc -l | tr -d ' ' || true)
+r_distinct="${r_distinct:-0}"
+plan_mode_count_cx=$(count_events plan_mode)
+codex_review_count=$(count_events codex_review)
+if { [ "$plan_mode_count_cx" -gt 0 ] || [ "$r_distinct" -ge 4 ]; } && [ "$codex_review_count" -eq 0 ]; then
+  add_reminder "codex_review" "Codex review not dispatched this session. Review is pre-authorized - dispatch without asking. Two steps: dispatch via the codex rescue agent, then harvest via the companion's status/result commands in the main conversation."
+  if [ "$(count_events intervention codex_reminder)" -eq 0 ]; then
+    append_event "intervention" "codex_reminder"
+  fi
+fi
+
 # --- DECISION ---
 if [ -n "$failures" ]; then
   append_event "stop_blocked" "$blocked_gates"

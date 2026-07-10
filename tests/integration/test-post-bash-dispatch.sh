@@ -195,4 +195,36 @@ LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "t-custom")
 run_post_bash "t-custom" "make check" > /dev/null
 assert_eq "custom_test_command_appends_custom" "custom" "$(last_event test_run "$LOG")"
 
+# --- Codex review detection (spec §5.6, D7/L9, T6) ---
+
+# Bare `codex` CLI invocation → codex_review event, value "cli"
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "codex-cli")
+run_post_bash "codex-cli" "codex exec 'review the wave 4 diff'" > /dev/null
+assert_eq "codex_cli_logs_review_event" "cli" "$(last_event codex_review "$LOG")"
+
+# Chained codex (word-boundary form, not line-anchored) still matches
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "codex-chained")
+run_post_bash "codex-chained" "cd /tmp && codex resume task-x" > /dev/null
+assert_eq "codex_chained_logs_review_event" "cli" "$(last_event codex_review "$LOG")"
+
+# Companion runtime invocation (dispatch OR harvest step) → event
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "codex-companion")
+run_post_bash "codex-companion" "node C:/tools/codex-companion.mjs result task-42" > /dev/null
+assert_eq "codex_companion_logs_review_event" "cli" "$(last_event codex_review "$LOG")"
+
+# `codexify` (leading substring) must NOT match — word boundary required
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "codexify")
+run_post_bash "codexify" "codexify --run all" > /dev/null
+assert_eq "codexify_no_event" "0" "$(count_events codex_review '' '' "$LOG")"
+
+# `mycodex` (trailing substring) must NOT match either
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "mycodex")
+run_post_bash "mycodex" "./mycodex status" > /dev/null
+assert_eq "mycodex_no_event" "0" "$(count_events codex_review '' '' "$LOG")"
+
 end_suite

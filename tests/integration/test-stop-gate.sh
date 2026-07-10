@@ -387,4 +387,64 @@ result=$(run_stop_gate "tests-gate-docs-only")
 assert_not_contains "gate3_docs_only_never_blocks" "$result" "\"decision\":\"block\""
 assert_not_contains "gate3_docs_only_no_reminder_either" "$result" "Tests not run"
 
+# --- NEW Codex-review gate (spec §5.6, D7/L9, T6): reminder-only ---
+
+# Trigger A: plan_mode used, no codex_review → approve path carries the
+# reminder (pre-authorized + two-step wording) and logs the intervention
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "codex-gate-plan" \
+  "1700000002|plan_mode|used")
+result=$(run_stop_gate "codex-gate-plan")
+assert_not_contains "codex_gate_does_not_block" "$result" "\"decision\":\"block\""
+assert_contains "codex_gate_reminder_text" "$result" "Codex review not dispatched"
+assert_contains "codex_gate_preauthorized_text" "$result" "pre-authorized"
+assert_contains "codex_gate_two_step_text" "$result" "harvest"
+assert_contains "codex_gate_intervention_logged" "$(list_events intervention "$LOG")" "codex_reminder"
+
+# Trigger B: >= 4 distinct r-flagged files (commit-anchored so Gate 1 stays
+# quiet; test_run seeded so Gate 3 stays quiet regardless of stray ecosystem
+# markers left in the suite tmpdir — setup_test only wipes .claude/*), no
+# plan_mode → reminder still fires
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "codex-gate-files")
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/a.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/b.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/c.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/d.ts"
+echo "1700000100|commit|abc1234 feat: four files" >> "$LOG"
+echo "1700000101|test_run|vitest" >> "$LOG"
+result=$(run_stop_gate "codex-gate-files")
+assert_not_contains "codex_gate_files_does_not_block" "$result" "\"decision\":\"block\""
+assert_contains "codex_gate_files_reminder_text" "$result" "Codex review not dispatched"
+assert_contains "codex_gate_files_intervention_logged" "$(list_events intervention "$LOG")" "codex_reminder"
+
+# Satisfied: codex_review event present → silent, no intervention
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "codex-gate-satisfied" \
+  "1700000002|plan_mode|used" \
+  "1700000003|codex_review|cli")
+result=$(run_stop_gate "codex-gate-satisfied")
+assert_not_contains "codex_gate_silent_when_reviewed" "$result" "Codex review not dispatched"
+assert_eq "codex_gate_no_intervention_when_reviewed" "0" "$(count_events intervention codex_reminder '' "$LOG")"
+
+# Under both triggers: 3 distinct r files, no plan_mode → silent
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "codex-gate-under")
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/a.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/b.ts"
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/c.ts"
+echo "1700000100|commit|abc1234 feat: three files" >> "$LOG"
+result=$(run_stop_gate "codex-gate-under")
+assert_not_contains "codex_gate_silent_under_thresholds" "$result" "Codex review not dispatched"
+
+# Once per session: a second Stop re-reminds but does NOT duplicate the
+# intervention event (the fired denominator counts sessions, not Stop attempts)
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "codex-gate-once" \
+  "1700000002|plan_mode|used")
+run_stop_gate "codex-gate-once" > /dev/null
+result=$(run_stop_gate "codex-gate-once")
+assert_contains "codex_gate_second_stop_still_reminds" "$result" "Codex review not dispatched"
+assert_eq "codex_intervention_once_per_session" "1" "$(count_events intervention codex_reminder '' "$LOG")"
+
 end_suite

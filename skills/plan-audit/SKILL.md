@@ -1,6 +1,7 @@
 ---
 name: plan-audit
 description: This skill should be used before calling ExitPlanMode or finalizing any implementation plan — 44-gate layered audit with Killer 7 universal core, risk-tiered depth, and domain-specific activation. Catches silent failures, data integrity bugs, security gaps, math errors, architecture conflicts, idempotency violations, race conditions, blast radius issues, and AI-isms. Non-negotiable before any plan approval.
+version: 1.0.1
 ---
 
 # Plan Audit v1.0
@@ -171,6 +172,8 @@ Write findings to the plan file:
 Each gate produces either a **finding** (something discovered) or **"clear with evidence"** (a specific fact confirming correctness). Never just "PASS."
 
 "Clear with evidence" can be one line: `"row count: 3361 * 1 = 3361 < 50K — within limits."`
+
+On audit completion, dispatch a Codex review of the audited plan when the Codex CLI is available (pre-authorized — no need to ask; dispatch and result-harvest are two separate steps). The stop-gate Codex reminder is the structural backstop; this mention is the belt.
 
 ## Justified Exclusion
 
