@@ -83,4 +83,84 @@ assert_not_contains "scanner_skips_comment_only_mention" "$hits2" "clean-comment
 assert_not_contains "scanner_skips_unrelated_read_call" "$hits2" "clean-read.sh"
 assert_not_contains "scanner_skips_wrapper_names" "$hits2" "clean-wrapper.sh"
 
+# --- W7 (spec §12): temp-file-rewrite idioms are allowlist-only ---
+# The event-log architecture bans mutation structurally; this scan keeps it
+# banned statically. Any `> $TARGET.tmp.$$ && mv`-class rewrite or `sed -i`
+# under hooks/ must be one of the known single-writer CONTENT-DOCUMENT
+# rewrites (health / proposals / cross-session / collaboration maintenance).
+# The allowlist is file+construct pairs, not construct-only — the same idiom
+# in a new file, or pointed at a new target (an event log above all), fails.
+scan_for_rewrite_idioms() {
+  awk '
+    { sub(/\r$/, "") }
+    prev != "" { $0 = prev $0; prev = "" }
+    /\\$/ { prev = substr($0, 1, length($0) - 1); next }
+    /^[[:space:]]*#/ { next }
+    /(^|[;&|[:space:]])sed[[:space:]]+(-[A-Za-z]+[[:space:]]+)*(-i|--in-place)/ {
+      printf "%s:%d:%s\n", FILENAME, FNR, $0; next
+    }
+    /\.tmp\.\$\$/ {
+      printf "%s:%d:%s\n", FILENAME, FNR, $0
+    }
+  ' "$@" 2>/dev/null
+}
+
+# filter_rewrite_allowlist — drops hits matching the sanctioned (file, target)
+# pairs; whatever survives is a violation. Targets, all documents:
+#   validate-organism.sh    HEALTH_FILE rebuild/prune + cross_file prune (§3.7)
+#   state-io.sh             flat_health migration rewrite (dies in 4.2)
+#   session-end-dispatch.sh HEALTH_FILE header-strip + CROSS_FILE tracker update
+#   session-start           PROPOSALS_FILE surfaced_count bump (boot, single writer)
+#   apply-proposal.sh       PROPOSALS_FILE status transitions (user command)
+#   synthesis-automation.sh COLLAB_FILE promotion sweep (boot, single writer)
+filter_rewrite_allowlist() {
+  awk '
+    {
+      file = $0
+      sub(/:.*$/, "", file)      # strip first ":" onward (POSIX-style paths)
+      sub(/.*\//, "", file)      # basename
+      allowed = 0
+      if (file == "validate-organism.sh" && ($0 ~ /HEALTH_FILE\.tmp\.\$\$/ || $0 ~ /cross_file\.tmp\.\$\$/)) allowed = 1
+      else if (file == "state-io.sh" && $0 ~ /flat_health\.tmp\.\$\$/) allowed = 1
+      else if (file == "session-end-dispatch.sh" && ($0 ~ /HEALTH_FILE\.tmp\.\$\$/ || $0 ~ /CROSS_FILE\.tmp\.\$\$/)) allowed = 1
+      else if (file == "session-start" && $0 ~ /PROPOSALS_FILE\.tmp\.\$\$/) allowed = 1
+      else if (file == "apply-proposal.sh" && $0 ~ /PROPOSALS_FILE\.tmp\.\$\$/) allowed = 1
+      else if (file == "synthesis-automation.sh" && $0 ~ /COLLAB_FILE[}]?\.tmp\.\$\$/) allowed = 1
+      if (!allowed) print
+    }'
+}
+
+# hooks/ must be clean after allowlist filtering
+mapfile -t hook_files_w7 < <(find "$PLUGIN_ROOT/hooks" -type f \( -name '*.sh' -o -name 'session-start' \))
+hits=$(scan_for_rewrite_idioms "${hook_files_w7[@]}" | filter_rewrite_allowlist)
+assert_eq "no_unallowlisted_rewrite_idioms_in_hooks" "" "$hits"
+
+# --- fixture proofs ---
+FIX3=$(mktemp -d)
+# planted violation: the one mutation that must NEVER exist — an event-log rewrite
+printf 'awk "..." "$EVENT_LOG" > "$EVENT_LOG.tmp.$$" && mv "$EVENT_LOG.tmp.$$" "$EVENT_LOG"\n' > "$FIX3/eventlog-rewrite.sh"
+# planted violation: sed -i (any target)
+printf 'sed -i "s/x/y/" "$SOME_FILE"\n' > "$FIX3/sed-inplace.sh"
+# planted violation: sed -i behind other flags
+printf 'sed -E -i "s/x/y/" "$SOME_FILE"\n' > "$FIX3/sed-inplace-flags.sh"
+# planted violation: allowlisted CONSTRUCT in a non-allowlisted FILE
+printf 'awk "..." "$HEALTH_FILE" > "$HEALTH_FILE.tmp.$$" && mv "$HEALTH_FILE.tmp.$$" "$HEALTH_FILE"\n' > "$FIX3/new-script.sh"
+# clean: comment-only mention
+printf '# the old > file.tmp.$$ && mv idiom is banned; sed -i too\nok=1\n' > "$FIX3/clean-comment.sh"
+# clean: allowlisted construct in the allowlisted file name
+printf 'awk "..." "$HEALTH_FILE" > "$HEALTH_FILE.tmp.$$" && mv "$HEALTH_FILE.tmp.$$" "$HEALTH_FILE"\n' > "$FIX3/validate-organism.sh"
+# clean: sed WITHOUT -i (pattern arg, no in-place)
+printf 'sed "s/x/y/" "$F" > "$OUT"\n' > "$FIX3/clean-sed.sh"
+
+hits3=$(scan_for_rewrite_idioms "$FIX3"/*.sh | filter_rewrite_allowlist)
+hit_count3=$(printf '%s' "$hits3" | awk 'NF { c++ } END { print c + 0 }')
+assert_eq "w7_catches_planted_violations" "4" "$hit_count3"
+assert_contains "w7_flags_eventlog_rewrite" "$hits3" "eventlog-rewrite.sh"
+assert_contains "w7_flags_sed_inplace" "$hits3" "sed-inplace.sh"
+assert_contains "w7_flags_sed_inplace_behind_flags" "$hits3" "sed-inplace-flags.sh"
+assert_contains "w7_flags_allowlisted_construct_in_new_file" "$hits3" "new-script.sh"
+assert_not_contains "w7_skips_comment_mention" "$hits3" "clean-comment.sh"
+assert_not_contains "w7_skips_allowlisted_file_construct" "$hits3" "validate-organism.sh"
+assert_not_contains "w7_skips_sed_without_inplace" "$hits3" "clean-sed.sh"
+
 end_suite
