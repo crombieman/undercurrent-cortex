@@ -48,6 +48,18 @@ seed_file_edit "$LOG" "r" "$problem_file"
 result=$(run_post_edit "re-edit" "$problem_file")
 assert_contains "re_edit_warning_at_three" "$result" "Re-edit"
 
+# Test 3b: re-edit warning fire appends an intervention event with the path as
+# payload (spec §6.3 T5p2 — the follow-through scorer needs the fire recorded
+# in the same log it derives from; kind is the first value token)
+setup_test
+problem_file="${_TEST_TMPDIR}/src/lib/problem.ts"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "re-edit-iv")
+seed_file_edit "$LOG" "r" "$problem_file"
+seed_file_edit "$LOG" "r" "$problem_file"
+run_post_edit "re-edit-iv" "$problem_file" > /dev/null
+ivs=$(list_events intervention "$LOG")
+assert_contains "re_edit_warning_intervention_logged" "$ivs" "re_edit_warning ${problem_file}"
+
 # Test 4: Plugin paths (.claude-plugin/) skip re-edit check
 setup_test
 LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "plugin-skip" \
@@ -150,6 +162,18 @@ done
 result=$(run_post_edit "boundary-16" "${_TEST_TMPDIR}/src/lib/boundary16_16.ts")
 assert_contains "nudge_fires_at_exactly_16_edits" "$result" "commit"
 
+# Test 8d: commit-nudge fire appends an intervention event (spec §6.3 T5p2)
+setup_test
+seed=()
+for i in $(seq 1 16); do
+  seed+=("$((1700000000 + i))|file_edit|r ${_TEST_TMPDIR}/src/lib/prior${i}.ts")
+done
+seed+=("1700000099|threshold_set|15")
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "nudge-iv" "${seed[@]}")
+run_post_edit "nudge-iv" "${_TEST_TMPDIR}/src/lib/foo.ts" > /dev/null
+ivs=$(list_events intervention "$LOG")
+assert_contains "commit_nudge_intervention_logged" "$ivs" "commit_nudge"
+
 # Test 9: Custom threshold (5) with 6 edits triggers nudge
 setup_test
 seed=()
@@ -219,5 +243,15 @@ LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "normal-edit" \
   "1700000002|threshold_set|15")
 result=$(run_post_edit "normal-edit" "src/lib/simple.ts")
 assert_eq "normal_edit_empty_response" "{}" "$result"
+
+# Test 11b: a normal edit that fires NO nudge/warning appends NO intervention
+# event (spec §6.3 — only actual fires are scored; a quiet pass must not
+# inflate the fired denominator)
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "normal-edit-iv" \
+  "1700000001|docs_edit|documentation.md" \
+  "1700000002|threshold_set|15")
+run_post_edit "normal-edit-iv" "src/lib/simple.ts" > /dev/null
+assert_eq "no_intervention_on_quiet_edit" "0" "$(count_events intervention '' '' "$LOG")"
 
 end_suite

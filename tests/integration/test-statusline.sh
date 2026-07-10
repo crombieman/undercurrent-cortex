@@ -39,6 +39,9 @@ result=$(run_statusline "{\"session_id\":\"sl-noicons\"}")
 line1=$(echo "$result" | head -1)
 assert_contains "tests_icon_default_x" "$line1" "🧪❌"
 assert_contains "docs_icon_default_x" "$line1" "📄❌"
+# No intervention data anywhere → EXACTLY two lines (the 🔁 line is optional,
+# spec §6.3: "a third line when data exists")
+assert_eq "no_interventions_two_lines_only" "2" "$(echo "$result" | wc -l | tr -d ' ')"
 
 # --- Test 3: tests/docs icons show checkmark when events present ---
 setup_test
@@ -156,5 +159,20 @@ echo "sl-marker" > "$_TEST_TMPDIR/.claude/cortex/current-session.id"
 result=$(run_statusline "")
 line1=$(echo "$result" | head -1)
 assert_contains "readonly_fallback_to_marker" "$line1" "3 edits"
+
+# --- Test 8: intervention follow-through third line (spec §6.3, T5p2) ---
+# One nudge followed by a commit (followed 1/1), one codex reminder never
+# harvested (0/1). Labels are the statusline short forms; format is
+# "<label> <followed>/<fired>"; kinds render in the report's sorted order.
+setup_test
+create_event_log "$_TEST_TMPDIR/.claude" "sl-interventions" \
+  "1700000002|intervention|commit_nudge" \
+  "1700000003|commit|abc1 fix: x" \
+  "1700000004|intervention|codex_reminder" > /dev/null
+result=$(run_statusline "{\"session_id\":\"sl-interventions\"}")
+line3=$(echo "$result" | sed -n '3p')
+assert_contains "interventions_line_present" "$line3" "🔁 interventions:"
+assert_contains "interventions_nudge_followed_over_fired" "$line3" "nudge 1/1"
+assert_contains "interventions_codex_not_followed" "$line3" "codex 0/1"
 
 end_suite

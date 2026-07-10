@@ -91,6 +91,19 @@ assert_contains "checkpoint_fires_at_25_count" "$result" "25 tool uses since las
 after=$(count_events tool_call '' '' "$LOG")
 assert_eq "checkpoint_fire_still_appends_tool_call" "25" "$after"
 
+# Test 6b: checkpoint fire appends intervention|journal_checkpoint (spec §6.3
+# T5p2 — the fire is recorded in the same log the follow-through scorer reads)
+setup_test
+seed=()
+for i in $(seq 1 24); do
+  seed+=("$((1700000000 + i))|tool_call|Read")
+done
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "pd-checkpoint-iv" "${seed[@]}")
+json=$(mock_json "tool_name=Read" "session_id=pd-checkpoint-iv")
+run_post_dispatch "$json" > /dev/null
+assert_contains "checkpoint_intervention_logged" \
+  "$(list_events intervention "$LOG")" "journal_checkpoint"
+
 # Test 7: Checkpoint does not fire before the 25th use (modulo boundary)
 setup_test
 seed=()
@@ -101,6 +114,7 @@ LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "pd-no-checkpoint" "${seed[@]}")
 json=$(mock_json "tool_name=Grep" "session_id=pd-no-checkpoint")
 result=$(run_post_dispatch "$json")
 assert_eq "checkpoint_does_not_fire_before_25" "{}" "$result"
+assert_eq "no_intervention_before_25" "0" "$(count_events intervention '' '' "$LOG")"
 
 # Test 8: Missing event log (session_id present, no log file on disk) still
 # routes to sub-handlers — routing is the dispatcher's job regardless of state.
@@ -143,6 +157,7 @@ journal_edits=$(list_events journal_edit "$LOG")
 assert_contains "journal_boundary_records_journal_edit" "$journal_edits" "2026-07-07.md"
 after=$(count_events tool_call '' '' "$LOG")
 assert_eq "journal_boundary_tool_call_count_25" "25" "$after"
+assert_eq "journal_boundary_no_intervention" "0" "$(count_events intervention '' '' "$LOG")"
 
 export PATH="$SAVED_PATH"
 end_suite

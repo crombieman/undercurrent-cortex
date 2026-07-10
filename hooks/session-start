@@ -441,6 +441,39 @@ if [ "$PROFILE" != "minimal" ] && [ -x "$SCRIPT_DIR/scripts/sensory-check.sh" ];
   sensory_output=$("$SCRIPT_DIR/scripts/sensory-check.sh" "$HOOK_INPUT" 2>/dev/null || echo "")
 fi
 
+# --- Step 5d: Intervention follow-through report (spec §6.3, every 10th
+# session). Cadence: number of PRIOR session logs in the 30-day scan window
+# (Step 1's _scanned_logs — excludes the log just created) is a positive
+# multiple of 10. The report itself is the same 30-day derivation /status
+# and the statusline read; kinds with >=10 fires and <20% follow-through are
+# surfaced as retirement candidates (user decides — never auto-retired).
+intervention_report_msg=""
+_prior_log_count=${#_scanned_logs[@]}
+if [ "$_prior_log_count" -gt 0 ] && [ $((_prior_log_count % 10)) -eq 0 ]; then
+  _ir=$(eio_intervention_report 2>/dev/null || true)
+  if [ -n "$_ir" ]; then
+    # WAVE-4 TUNABLE: retirement candidate = >=10 fires AND <20% follow-through
+    RETIRE_MIN_FIRES=10
+    RETIRE_MAX_PCT=20
+    intervention_report_msg=$(printf '%s\n' "$_ir" | RMF="$RETIRE_MIN_FIRES" RMP="$RETIRE_MAX_PCT" awk -F'|' '
+      {
+        lines = lines "  " $1 ": " $3 "/" $2 " followed\n"
+        if ($2 + 0 >= ENVIRON["RMF"] + 0 && $3 * 100 < $2 * (ENVIRON["RMP"] + 0)) {
+          cand = cand (cand == "" ? "" : ", ") $1
+        }
+      }
+      END {
+        if (lines != "") {
+          printf "Intervention follow-through (last 30 days):\n%s", lines
+          if (cand != "") {
+            printf "Retirement candidate(s) (>=%s fired, <%s%% followed): %s - consider retiring this nudge or adjusting its threshold.\n", ENVIRON["RMF"], ENVIRON["RMP"], cand
+          }
+        }
+      }
+    ')
+  fi
+fi
+
 # --- Step 6: Carry-over re-injection ---
 carry_over_msg=""
 if [ -n "$old_carry_over" ]; then
@@ -462,7 +495,7 @@ Do NOT skip these. Do NOT defer. Complete before addressing user's message."
 fi
 
 # --- Output ---
-full_context="${statusline_output:+${statusline_output}$'\n\n'}${repair_report:+${repair_report}$'\n\n'}${synthesis_directive:+${synthesis_directive}$'\n\n'}${skill_content}${missed_close}${proposal_summary}${social_warnings:+$'\n\n'${social_warnings}}${sensory_output:+$'\n\n'Sensory scan:$'\n'${sensory_output}}${carry_over_msg}"
+full_context="${statusline_output:+${statusline_output}$'\n\n'}${repair_report:+${repair_report}$'\n\n'}${synthesis_directive:+${synthesis_directive}$'\n\n'}${skill_content}${missed_close}${proposal_summary}${social_warnings:+$'\n\n'${social_warnings}}${intervention_report_msg:+$'\n\n'${intervention_report_msg}}${sensory_output:+$'\n\n'Sensory scan:$'\n'${sensory_output}}${carry_over_msg}"
 escaped=$(escape_for_json "$full_context")
 context="<cortex-session-start>${escaped}</cortex-session-start>"
 

@@ -75,6 +75,9 @@ if [ -n "$EVENT_LOG" ] && [ -f "$EVENT_LOG" ]; then
   if [ "$is_journal_edit" = false ]; then
     uses=$(count_events tool_call '' journal_edit)
     if [ "$uses" -gt 0 ] && [ $((uses % 25)) -eq 0 ]; then
+      # Record the fire for follow-through scoring (spec §6.3): followed iff a
+      # journal_edit lands within the next 10 tool_call events.
+      append_event "intervention" "journal_checkpoint"
       source "$SCRIPT_DIR/lib/escape-json.sh" || true
       checkpoint=$(escape_for_json "📝 Mid-session checkpoint (${uses} tool uses since last journal entry): consider adding a journal entry to memory/YYYY-MM-DD.md. What's the current state of the work?")
       printf '{"systemMessage":"%s"}' "$checkpoint"

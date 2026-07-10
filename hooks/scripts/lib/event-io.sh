@@ -294,8 +294,11 @@ eio_intervention_report_dirs() {
         for (i = 1; i <= cn_n; i++) if (cn_hit[i]) fol["commit_nudge"]++
         for (i = 1; i <= jc_n; i++) if (jc_hit[i]) fol["journal_checkpoint"]++
         for (i = 1; i <= rw_n; i++) if (rw_count[i] < 2) fol["re_edit_warning"]++
-        if (fired["cautious_mode"] > 0 && maxrep < 3) fol["cautious_mode"] = fired["cautious_mode"]
-        if (fired["codex_reminder"] > 0 && cr_seen)  fol["codex_reminder"]  = fired["codex_reminder"]
+        # `in` tests, NOT fired[k]>0 subscripts: merely referencing fired["x"]
+        # INSTANTIATES the key, so a zero-intervention log would emit spurious
+        # "x|0|0" rows (contract: kinds never fired are omitted).
+        if (("cautious_mode" in fired) && maxrep < 3) fol["cautious_mode"] = fired["cautious_mode"]
+        if (("codex_reminder" in fired) && cr_seen)   fol["codex_reminder"]  = fired["codex_reminder"]
         for (k in fired) printf "%s|%d|%d\n", k, fired[k], fol[k] + 0
       }
     ' "$f"

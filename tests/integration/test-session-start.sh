@@ -372,5 +372,69 @@ assert_eq "age_survival_matches_by_hash_not_text" "7" "$(last_event carry_over_a
 assert_contains "whitespace_drift_item_still_resurfaces" \
   "$(list_events carry_over "$NEW_LOG")" "Whitespace drift item ddd"
 
+# --- Test 16: every-10th-session intervention report (spec §6.3, T5p2) ---
+# Exactly 10 prior logs (count % 10 == 0, count > 0) → session-start surfaces
+# the 30-day follow-through report in its context output.
+setup_opted_test
+sid="ss-ir-10th"
+for i in $(seq 1 9); do
+  create_event_log "$_TEST_TMPDIR/.claude" "prior-ir-$i" > /dev/null
+done
+create_event_log "$_TEST_TMPDIR/.claude" "prior-ir-10" \
+  "1700000002|intervention|commit_nudge" \
+  "1700000003|commit|abc1 feat: y" > /dev/null
+result=$(run_session_start "$(mock_json "session_id=$sid")")
+assert_contains "tenth_session_surfaces_intervention_report" "$result" "Intervention follow-through"
+assert_contains "tenth_session_report_counts" "$result" "commit_nudge: 1/1"
+
+# --- Test 16b: 9 prior logs (count % 10 != 0) → NO report block, even though
+# intervention data exists ---
+setup_opted_test
+sid="ss-ir-9th"
+for i in $(seq 1 8); do
+  create_event_log "$_TEST_TMPDIR/.claude" "prior-ir9-$i" > /dev/null
+done
+create_event_log "$_TEST_TMPDIR/.claude" "prior-ir9-9" \
+  "1700000002|intervention|commit_nudge" \
+  "1700000003|commit|abc1 feat: y" > /dev/null
+result=$(run_session_start "$(mock_json "session_id=$sid")")
+assert_not_contains "ninth_session_no_intervention_report" "$result" "Intervention follow-through"
+
+# --- Test 16c: retirement candidates (WAVE-4 TUNABLE: >=10 fires AND <20%
+# follow-through) — commit_nudge at 1/10 (10%) IS flagged; journal_checkpoint
+# at exactly 2/10 (20%) is NOT (strict <). The "- consider" suffix directly
+# after the kind pins that commit_nudge is the ONLY listed candidate. ---
+setup_opted_test
+sid="ss-ir-retire"
+for i in $(seq 1 9); do
+  create_event_log "$_TEST_TMPDIR/.claude" "prior-ret-$i" > /dev/null
+done
+retire_seed=(
+  "1700000001|intervention|commit_nudge"
+  "1700000002|commit|abc1 feat: a"
+)
+for i in $(seq 3 11); do
+  retire_seed+=("$((1700000000 + i))|intervention|commit_nudge")
+done
+for i in $(seq 12 16); do
+  retire_seed+=("$((1700000000 + i))|file_edit|r C:/p/exhaust${i}.ts")
+done
+retire_seed+=(
+  "1700000017|intervention|journal_checkpoint"
+  "1700000018|intervention|journal_checkpoint"
+  "1700000019|journal_edit|memory/2026-07-10.md"
+)
+for i in $(seq 20 27); do
+  retire_seed+=("$((1700000000 + i))|intervention|journal_checkpoint")
+done
+for i in $(seq 28 37); do
+  retire_seed+=("$((1700000000 + i))|tool_call|Read")
+done
+create_event_log "$_TEST_TMPDIR/.claude" "prior-ret-10" "${retire_seed[@]}" > /dev/null
+result=$(run_session_start "$(mock_json "session_id=$sid")")
+assert_contains "retirement_candidate_flagged" "$result" "Retirement candidate"
+assert_contains "retirement_candidate_only_commit_nudge" "$result" "commit_nudge - consider"
+assert_contains "boundary_20pct_reported_not_flagged" "$result" "journal_checkpoint: 2/10"
+
 export PATH="$SAVED_PATH"
 end_suite

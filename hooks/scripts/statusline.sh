@@ -87,6 +87,29 @@ else
   trend_segment="${arrow} ${ht_verdict}"
 fi
 
+# --- Line 3 data (optional): intervention follow-through (spec §6.3) ---
+# Cross-session 30-day rates from eio_intervention_report; rendered as
+# "<label> <followed>/<fired>" per kind, in the report's sorted-kind order.
+# No intervention data anywhere → the line is omitted entirely.
+intervention_line=""
+ir=$(eio_intervention_report 2>/dev/null || true)
+if [ -n "$ir" ]; then
+  intervention_line=$(printf '%s\n' "$ir" | awk -F'|' '
+    {
+      label = $1
+      if ($1 == "commit_nudge")            label = "nudge"
+      else if ($1 == "journal_checkpoint") label = "checkpoint"
+      else if ($1 == "re_edit_warning")    label = "re-edit"
+      else if ($1 == "cautious_mode")      label = "cautious"
+      else if ($1 == "codex_reminder")     label = "codex"
+      out = out (out == "" ? "" : " · ") label " " $3 "/" $2
+    }
+    END { if (out != "") print "🔁 interventions: " out }
+  ')
+fi
+
 # --- Output ---
 printf '✏️  %s edits · 📦 %s commits · 🧪%s · 📄%s\n' "$edits" "$commits" "$tests_icon" "$docs_icon"
 printf '%s %s │ 🧠 %s absorbed │ 🧬 %s mutations queued │ %s\n' "$heart" "$status" "$lessons" "$proposals" "$trend_segment"
+[ -n "$intervention_line" ] && printf '%s\n' "$intervention_line"
+exit 0

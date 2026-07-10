@@ -41,6 +41,10 @@ if ! echo "$file_path" | grep -qE '\.claude-plugin/|\.claude/'; then
     fi
   fi
   if [ "$re_edit_count" -ge 3 ]; then
+    # Record the fire for follow-through scoring (spec §6.3): kind first token,
+    # warned path as payload. Appended AFTER this edit's file_edit event, so
+    # only FURTHER edits of the path count against the <2 follow window.
+    append_event "intervention" "re_edit_warning ${file_path}"
     source "$SCRIPT_DIR/lib/escape-json.sh" || true
     msg=$(escape_for_json "Re-edit detected: ${file_path} has been modified ${re_edit_count} times this session. Consider stepping back to re-plan the approach.")
     printf '{"systemMessage":"%s"}' "$msg"
@@ -88,6 +92,9 @@ if [ -n "$cfg_threshold" ]; then
   esac
 fi
 if [ "${edits:-0}" -gt "$threshold" ]; then
+  # Record the fire for follow-through scoring (spec §6.3): followed iff a
+  # commit event lands within the next 5 r-flagged file_edits.
+  append_event "intervention" "commit_nudge"
   source "$SCRIPT_DIR/lib/escape-json.sh" || true
   msg=$(escape_for_json "You have ${edits} edits since last commit (threshold: ${threshold}). Consider committing — many edits since last commit.")
   printf '{"systemMessage":"%s"}' "$msg"

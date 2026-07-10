@@ -363,4 +363,19 @@ printf '1700000005|file_edit|r C:/p/x.ts
 report=$(eio_intervention_report_dirs "$IRD/.claude/cortex/sessions")
 assert_contains "ir_cautious_broken_by_churn" "$report" "cautious_mode|1|0"
 
+# Kinds never fired are OMITTED — a log with zero intervention events yields an
+# EMPTY report, not spurious "cautious_mode|0|0"/"codex_reminder|0|0" rows.
+# (Regression: awk instantiates array keys on mere reference — fired["x"] in a
+# condition created the key, leaking 0/0 rows into every report and forcing a
+# phantom third statusline line on projects with no interventions at all.)
+IRD2=$(mktemp -d)
+mkdir -p "$IRD2/.claude/cortex/sessions/2026-W99"
+cat > "$IRD2/.claude/cortex/sessions/2026-W99/quiet.events.log" <<'IREOF'
+1700000001|session_start|2026-07-10T00:00:00Z m
+1700000002|file_edit|r C:/p/a.ts
+1700000003|commit|abc1 feat: quiet
+IREOF
+report=$(eio_intervention_report_dirs "$IRD2/.claude/cortex/sessions")
+assert_eq "ir_no_interventions_empty_report" "" "$report"
+
 end_suite

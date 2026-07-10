@@ -1,7 +1,7 @@
 ---
 name: session-start
 description: This skill should be used when starting or resuming a session — reads memory, creates journal, surfaces carry-over and domain-relevant lessons.
-version: 0.4.0
+version: 0.4.1
 ---
 
 # Session Start
@@ -18,14 +18,14 @@ version: 0.4.0
    - **Applied tracking**: After reading, note which patterns are relevant to today's task or conversation. Log them in the journal. At session-end, check which were actually followed and increment their `Applied` count then.
    - **Duplicate detection**: Scan for entries that describe semantically similar behaviors (same pattern worded differently across sessions). Flag to user: "Patterns X and Y look like duplicates — merge or keep separate?"
 5. Read `~/.cortex/synthesis/workflows/_index.md` (compact index only) — awareness of reusable approaches. If the file doesn't exist, skip.
-6. **Display the organism statusline.** The SessionStart hook injects it into system context (inside `<cortex-session-start>` tags), but the user cannot see system context. Copy the two statusline lines verbatim, then append a third line with model metadata extracted from your system context:
+6. **Display the organism statusline.** The SessionStart hook injects it into system context (inside `<cortex-session-start>` tags), but the user cannot see system context. Copy the statusline lines verbatim (two lines, plus a third `🔁 interventions:` line when follow-through data exists), then append a final line with model metadata extracted from your system context:
    ```
    🤖 {model_name} · ⚡ {effort_level} · 🪟 {context_window}
    ```
    - `model_name`: Your model name (e.g., "Opus 4.6", "Sonnet 4.6", "Haiku 4.5")
    - `effort_level`: Reasoning effort if set (e.g., "effort: 85"), or "default" if not specified
    - `context_window`: Context window size if known (e.g., "1M context", "200K context")
-   Display all three lines in your first response to the user.
+   Display all the lines in your first response to the user.
 
 ## If task is non-trivial (new feature, bug, architectural decision — not a quick question)
 7. Read `tasks/todo.md` + scan `tasks/lessons.md` by domain:
