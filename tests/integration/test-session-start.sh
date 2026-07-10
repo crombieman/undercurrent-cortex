@@ -452,5 +452,14 @@ assert_contains "hot_files_derived_from_logs" "$result" "Frequently edited files
 assert_contains "hot_files_lists_path_with_count" "$result" "recurring.ts (4 sessions)"
 assert_not_contains "legacy_tracker_file_not_read" "$result" "old-tracker.ts"
 
+# --- Test 18: context diet (spec §10/R6) — the wholesale SKILL.md body is no
+# longer injected every boot; a compact pulse with a pointer to the full
+# skill replaces it (per-session data blocks are unaffected) ---
+setup_opted_test
+sid="ss-diet"
+result=$(run_session_start "$(mock_json "session_id=$sid")")
+assert_contains "diet_pulse_pointer_present" "$result" "full protocol: /cortex:session-start"
+assert_not_contains "diet_full_skill_body_absent" "$result" "references/memory-tiers.md"
+
 export PATH="$SAVED_PATH"
 end_suite

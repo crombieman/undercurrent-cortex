@@ -280,9 +280,18 @@ if [ -f "$COLLAB_FILE" ]; then
   synthesis_actions=$("$SCRIPT_DIR/scripts/synthesis-automation.sh" 2>/dev/null || echo "")
 fi
 
-# --- Step 3: Read skill content + yesterday check (preserved from v1) ---
-skill_content=$(cat "${PLUGIN_ROOT}/skills/session-start/SKILL.md" 2>/dev/null \
-  || echo "session-start skill not found")
+# --- Step 3: Compact session-start pulse (context diet, spec §10/R6) ---
+# v4.0: the full SKILL.md body (6.5 KB) is no longer injected wholesale every
+# boot. The pulse below (~0.9 KB) keeps the actionable steps; per-session DATA
+# blocks (statusline, synthesis directive, carry-over, sensory, reports) are
+# unaffected. Full protocol is one skill invocation away.
+skill_content="## Session-start protocol (compact pulse — full protocol: /cortex:session-start)
+1. Read MEMORY.md, then read-or-create memory/$(date +%Y-%m-%d).md; write any carry-over surfaced below into it as the first entry. If a missed session-end warning appears below, run /cortex:session-end retrospectively first.
+2. Read ~/.cortex/synthesis/collaboration.md (full file) and ~/.cortex/synthesis/workflows/_index.md; complete the REQUIRED synthesis tasks listed above before addressing the user's message.
+3. Display the statusline lines above verbatim, plus a model-metadata line: 🤖 {model} · ⚡ {effort} · 🪟 {context window}.
+4. Non-trivial task: scan tasks/lessons.md by domain and log surfaced lesson IDs (L-YYYYMMDD-nn) to the journal. Touching architecture/schema/pipeline: check documentation.md staleness first.
+5. Housekeeping (after greeting, non-blocking): archive previous-month journals with no open [carry-over]; clean .claude/cortex .tmp files.
+When in doubt, invoke /cortex:session-start for the full skill."
 
 yesterday=$(date -d "yesterday" +%Y-%m-%d 2>/dev/null \
   || date -v-1d +%Y-%m-%d 2>/dev/null || echo "")
