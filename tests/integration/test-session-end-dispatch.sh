@@ -153,14 +153,27 @@ run_session_end "se-flag" > /dev/null
 hw=$(last_event health_written "$LOG")
 assert_eq "sets_health_written_event" "$TODAY" "$hw"
 
-# --- Test 8: Creates cross-session file (unchanged from v3/v4) ---
+# --- Test 8: cross-session tracker RETIRED (wave 5, locked D6): session-end
+# neither creates nor updates cross-session.local.md — hot files are derived
+# at read from the logs themselves (eio_hot_files). A legacy file on disk is
+# inert: byte-identical after the hook runs. ---
 setup_test
 create_event_log "$_TEST_TMPDIR/.claude" "se-cross" \
   "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/utils.ts" > /dev/null
 make_journal "$_TEST_TMPDIR"
 run_session_end "se-cross" > /dev/null
 cross_file="$_TEST_TMPDIR/.claude/cortex/cross-session.local.md"
-assert_file_exists "creates_cross_session_file" "$cross_file"
+assert_eq "no_cross_session_file_created" "" "$(ls "$cross_file" 2>/dev/null || true)"
+
+setup_test
+create_event_log "$_TEST_TMPDIR/.claude" "se-cross-legacy" \
+  "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/utils.ts" > /dev/null
+make_journal "$_TEST_TMPDIR"
+cross_file="$_TEST_TMPDIR/.claude/cortex/cross-session.local.md"
+printf '# Cross-Session File Edit Tracker\nC:/legacy/old.ts|9|2026-07-01\n' > "$cross_file"
+before=$(cat "$cross_file")
+run_session_end "se-cross-legacy" > /dev/null
+assert_eq "legacy_cross_session_file_untouched" "$before" "$(cat "$cross_file")"
 
 # --- Test 9: topology="focused" for 2 unique r-edits (<3 => domain "mixed",
 # not idle — activity present, just not enough to attribute a segment) ---

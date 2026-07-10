@@ -436,5 +436,21 @@ assert_contains "retirement_candidate_flagged" "$result" "Retirement candidate"
 assert_contains "retirement_candidate_only_commit_nudge" "$result" "commit_nudge - consider"
 assert_contains "boundary_20pct_reported_not_flagged" "$result" "journal_checkpoint: 2/10"
 
+# --- Test 17: hot-files social warning is DERIVED from prior event logs
+# (wave 5, locked D6) — cross-session.local.md is neither read nor written;
+# a legacy tracker file with a poison path must not leak into the output ---
+setup_opted_test
+sid="ss-hotfiles"
+for i in $(seq 1 4); do
+  create_event_log "$_TEST_TMPDIR/.claude" "hot-$i" \
+    "1700000002|file_edit|r ${_TEST_TMPDIR}/src/lib/recurring.ts" > /dev/null
+done
+printf '# Cross-Session File Edit Tracker\nC:/poison/old-tracker.ts|9|2026-07-01\n' \
+  > "$_TEST_TMPDIR/.claude/cortex/cross-session.local.md"
+result=$(run_session_start "$(mock_json "session_id=$sid")")
+assert_contains "hot_files_derived_from_logs" "$result" "Frequently edited files"
+assert_contains "hot_files_lists_path_with_count" "$result" "recurring.ts (4 sessions)"
+assert_not_contains "legacy_tracker_file_not_read" "$result" "old-tracker.ts"
+
 export PATH="$SAVED_PATH"
 end_suite

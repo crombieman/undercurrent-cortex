@@ -107,9 +107,11 @@ scan_for_rewrite_idioms() {
 
 # filter_rewrite_allowlist — drops hits matching the sanctioned (file, target)
 # pairs; whatever survives is a violation. Targets, all documents:
-#   validate-organism.sh    HEALTH_FILE rebuild/prune + cross_file prune (§3.7)
+#   validate-organism.sh    HEALTH_FILE rebuild/prune (§3.7; cross_file prune
+#                           REMOVED wave 5 — tracker retired per locked D6)
 #   state-io.sh             flat_health migration rewrite (dies in 4.2)
-#   session-end-dispatch.sh HEALTH_FILE header-strip + CROSS_FILE tracker update
+#   session-end-dispatch.sh HEALTH_FILE header-strip (CROSS_FILE update
+#                           REMOVED wave 5 — hot files derive via eio_hot_files)
 #   session-start           PROPOSALS_FILE surfaced_count bump (boot, single writer)
 #   apply-proposal.sh       PROPOSALS_FILE status transitions (user command)
 #   synthesis-automation.sh COLLAB_FILE promotion sweep (boot, single writer)
@@ -120,9 +122,9 @@ filter_rewrite_allowlist() {
       sub(/:.*$/, "", file)      # strip first ":" onward (POSIX-style paths)
       sub(/.*\//, "", file)      # basename
       allowed = 0
-      if (file == "validate-organism.sh" && ($0 ~ /HEALTH_FILE\.tmp\.\$\$/ || $0 ~ /cross_file\.tmp\.\$\$/)) allowed = 1
+      if (file == "validate-organism.sh" && $0 ~ /HEALTH_FILE\.tmp\.\$\$/) allowed = 1
       else if (file == "state-io.sh" && $0 ~ /flat_health\.tmp\.\$\$/) allowed = 1
-      else if (file == "session-end-dispatch.sh" && ($0 ~ /HEALTH_FILE\.tmp\.\$\$/ || $0 ~ /CROSS_FILE\.tmp\.\$\$/)) allowed = 1
+      else if (file == "session-end-dispatch.sh" && $0 ~ /HEALTH_FILE\.tmp\.\$\$/) allowed = 1
       else if (file == "session-start" && $0 ~ /PROPOSALS_FILE\.tmp\.\$\$/) allowed = 1
       else if (file == "apply-proposal.sh" && $0 ~ /PROPOSALS_FILE\.tmp\.\$\$/) allowed = 1
       else if (file == "synthesis-automation.sh" && $0 ~ /COLLAB_FILE[}]?\.tmp\.\$\$/) allowed = 1

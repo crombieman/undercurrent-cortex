@@ -344,6 +344,54 @@ eio_intervention_report() {
   eio_intervention_report_dirs "$(_eio_sessions_dir)" "${1:-30}"
 }
 
+# eio_hot_files [days] [min_sessions] [sessions_dir]
+# Cross-session hot files, derived at read from week-bucket logs (spec §3.5,
+# locked D6: the mutable cross-session.local.md tracker is retired — legacy
+# files on disk are inert, no reader and no writer). Emits
+# "path|distinct_session_count" lines, most-recurrent first, for r-flagged
+# file_edit paths appearing in >= min_sessions DISTINCT session logs whose
+# mtime falls within [days] (defaults 30, 4). Per-log dedup means N edits of
+# one path in one session still count as ONE session. Plugin-infrastructure
+# paths (.claude/, .claude-plugin/) are excluded, matching the old tracker.
+eio_hot_files() {
+  local days="${1:-30}" min_sessions="${2:-4}" sessions_dir="${3:-$(_eio_sessions_dir)}"
+  [ -d "$sessions_dir" ] || return 0
+  local now_epoch cutoff_epoch f f_epoch
+  now_epoch=$(date +%s)
+  cutoff_epoch=$(( now_epoch - days * 86400 ))
+  for f in "$sessions_dir"/*/*.events.log; do
+    [ -f "$f" ] || continue
+    f_epoch=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo "0")
+    if [ "$f_epoch" -gt 0 ] && [ "$f_epoch" -lt "$cutoff_epoch" ]; then
+      continue
+    fi
+    awk '
+      { sub(/\r$/, "") }
+      !/^[0-9]+\|[a-z_]+\|/ { next }
+      {
+        rest = substr($0, index($0, "|") + 1)
+        t = substr(rest, 1, index(rest, "|") - 1)
+        if (t != "file_edit") next
+        v = substr(rest, index(rest, "|") + 1)
+        if (substr(v, 1, 2) != "r ") next
+        p = substr(v, 3)
+        if (p ~ /\.claude\// || p ~ /\.claude-plugin\//) next
+        if (!(p in seen)) { seen[p] = 1; print p }
+      }
+    ' "$f"
+  done | sort | uniq -c | MINS="$min_sessions" awk '
+    {
+      # uniq -c: leading spaces, count, single space, then the path verbatim
+      # (substr reconstruction — field splitting would mangle spaced paths).
+      if (!match($0, /^[[:space:]]*[0-9]+ /)) next
+      c = substr($0, 1, RLENGTH - 1)
+      gsub(/[[:space:]]/, "", c)
+      p = substr($0, RLENGTH + 1)
+      if (c + 0 >= ENVIRON["MINS"] + 0) printf "%s|%d\n", p, c
+    }
+  ' | sort -t'|' -k2,2nr
+}
+
 # eio_unresolved_items <file> [file...]
 # Echoes UNRESOLVED carry-over item texts, one per line, deduped (each item text
 # appears once even if carried in multiple logs), in first-seen order across the

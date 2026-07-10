@@ -103,28 +103,10 @@ validate_organism() {
     fi
   fi
 
-  # --- 6. Cross-session file pruning (>500 lines) ---
-  local cross_file="${CORTEX_DIR:-${PROJECT_DIR}/.claude/cortex}/cross-session.local.md"
-  if [ -f "$cross_file" ]; then
-    local cross_lines
-    cross_lines=$(wc -l < "$cross_file" | tr -d ' ')
-    if [ "${cross_lines:-0}" -gt 500 ]; then
-      local cutoff
-      cutoff=$(date -d "30 days ago" +%Y-%m-%d 2>/dev/null || date -v-30d +%Y-%m-%d 2>/dev/null || echo "")
-      if [ -n "$cutoff" ]; then
-        CUTOFF="$cutoff" awk -F'|' '
-          /^#/ { print; next }
-          NF < 3 { print; next }
-          $3 >= ENVIRON["CUTOFF"] { print }
-        ' "$cross_file" > "$cross_file.tmp.$$" && mv "$cross_file.tmp.$$" "$cross_file"
-        local new_lines
-        new_lines=$(wc -l < "$cross_file" | tr -d ' ')
-        issues=$((issues + 1))
-        repairs=$((repairs + 1))
-        details="${details}pruned cross-session file from ${cross_lines} to ${new_lines} lines, "
-      fi
-    fi
-  fi
+  # --- 6. Cross-session file pruning: RETIRED (wave 5, locked D6). The
+  # tracker has no writer anymore (hot files derive from week-bucket logs via
+  # eio_hot_files); a legacy cross-session.local.md is inert and needs no
+  # maintenance. Numbering of the remaining checks kept for doc stability. ---
 
   # --- 7. Old backup cleanup (>7 days) ---
   if [ -d "$claude_dir" ]; then

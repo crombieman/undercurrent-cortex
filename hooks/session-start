@@ -424,13 +424,12 @@ if [ "$PROFILE" != "minimal" ] && [ -f "$HEALTH_FILE" ]; then
   fi
 fi
 
-# Recurring file edits (from cross-session tracker)
-CROSS_FILE="${CORTEX_DIR}/cross-session.local.md"
-if [ -f "$CROSS_FILE" ]; then
-  hot_files=$(awk -F'|' '/^[^#]/ && $2+0 >= 4 { printf "  - %s (%s sessions)\n", $1, $2 }' "$CROSS_FILE")
-  if [ -n "$hot_files" ]; then
-    social_warnings="${social_warnings}Frequently edited files (4+ sessions):"$'\n'"${hot_files}"$'\n'"Consider if these need a deeper refactor."$'\n'
-  fi
+# Recurring file edits — derived at read from the week-bucket logs (wave 5,
+# locked D6: the mutable cross-session.local.md tracker is retired; a legacy
+# file on disk is inert — no reader, no writer).
+hot_files=$(eio_hot_files 30 4 | awk -F'|' '{ printf "  - %s (%s sessions)\n", $1, $2 }')
+if [ -n "$hot_files" ]; then
+  social_warnings="${social_warnings}Frequently edited files (4+ sessions):"$'\n'"${hot_files}"$'\n'"Consider if these need a deeper refactor."$'\n'
 fi
 
 # --- Step 5c: Sensory System — external awareness ---

@@ -363,6 +363,47 @@ printf '1700000005|file_edit|r C:/p/x.ts
 report=$(eio_intervention_report_dirs "$IRD/.claude/cortex/sessions")
 assert_contains "ir_cautious_broken_by_churn" "$report" "cautious_mode|1|0"
 
+# --- eio_hot_files (wave 5, spec §3.5 / locked D6): cross-session hot files
+# derived at read from week-bucket logs — the mutable cross-session.local.md
+# tracker is retired. Counting is DISTINCT sessions (per-log dedup), r-flag
+# only, plugin-infrastructure paths excluded. ---
+HFD=$(mktemp -d)
+mkdir -p "$HFD/s/2026-W98" "$HFD/s/2026-W99"
+hf_log() {
+  local f="$HFD/s/$1.events.log"; shift
+  printf '1700000001|session_start|2026-07-10T00:00:00Z m\n' > "$f"
+  local l; for l in "$@"; do printf '%s\n' "$l" >> "$f"; done
+}
+hf_log "2026-W98/h1" \
+  "1700000002|file_edit|r C:/p/src/hot.ts" \
+  "1700000003|file_edit|r C:/p/src/warm.ts" \
+  "1700000004|file_edit|x C:/ext/xfile.ts" \
+  "1700000005|file_edit|r C:/p/.claude/exemplars/e.ts"
+hf_log "2026-W98/h2" \
+  "1700000002|file_edit|r C:/p/src/hot.ts" \
+  "1700000003|file_edit|r C:/p/src/warm.ts" \
+  "1700000004|file_edit|x C:/ext/xfile.ts" \
+  "1700000005|file_edit|r C:/p/.claude/exemplars/e.ts"
+hf_log "2026-W99/h3" \
+  "1700000002|file_edit|r C:/p/src/hot.ts" \
+  "1700000003|file_edit|r C:/p/src/warm.ts" \
+  "1700000004|file_edit|x C:/ext/xfile.ts" \
+  "1700000005|file_edit|r C:/p/.claude/exemplars/e.ts"
+# h4: hot.ts edited THREE times in one log — still ONE distinct session
+hf_log "2026-W99/h4" \
+  "1700000002|file_edit|r C:/p/src/hot.ts" \
+  "1700000003|file_edit|r C:/p/src/hot.ts" \
+  "1700000004|file_edit|r C:/p/src/hot.ts" \
+  "1700000005|file_edit|x C:/ext/xfile.ts" \
+  "1700000006|file_edit|r C:/p/.claude/exemplars/e.ts"
+report=$(eio_hot_files 30 4 "$HFD/s")
+assert_contains "hot_files_4_distinct_sessions_listed" "$report" "C:/p/src/hot.ts|4"
+assert_not_contains "hot_files_3_sessions_omitted" "$report" "warm.ts"
+assert_not_contains "hot_files_x_flag_omitted" "$report" "xfile.ts"
+assert_not_contains "hot_files_plugin_paths_omitted" "$report" ".claude/exemplars"
+report=$(eio_hot_files 30 3 "$HFD/s")
+assert_contains "hot_files_min_sessions_override" "$report" "C:/p/src/warm.ts|3"
+
 # journal_checkpoint 10th-tool boundary (Codex W4 review I-4): the journal
 # Write's OWN tool_call is logged before its journal_edit, so a journal edit
 # landing on exactly the 10th tool call IS "within the next 10 tool events"

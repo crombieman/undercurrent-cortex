@@ -216,51 +216,9 @@ rework_files="${rework_files:-0}"
 tests_pass="none"
 [ "$(count_events test_run)" -gt 0 ] && tests_pass="pass"
 
-# --- Cross-session file tracking (runs before dedup — this should happen
-# regardless of whether we write a health row; unchanged from v3/v4) ---
-CROSS_FILE="$(_eio_cortex_dir)/cross-session.local.md"
-if [ ! -f "$CROSS_FILE" ]; then
-  {
-    echo "# Cross-Session File Edit Tracker"
-    echo "# Format: filepath|session_count|last_session_date"
-  } > "$CROSS_FILE"
-fi
-
-if [ -n "$files_modified" ]; then
-  unique_files=$(echo "$files_modified" | sort -u)
-  while IFS= read -r raw_filepath; do
-    [ -z "$raw_filepath" ] && continue
-    # Fix 2: skip non-path lines (defensive — file_edit values are always
-    # real paths in v4, but keeps parity with any malformed event values)
-    echo "$raw_filepath" | grep -qE '[/\\]' || continue
-    # Fix 1: Normalize path format (backslash→forward slash, lowercase drive→uppercase)
-    filepath=$(normalize_path "$raw_filepath")
-    # Skip plugin infrastructure files
-    echo "$filepath" | grep -qE '\.claude-plugin/|\.claude/' && continue
-    if grep -qF "${filepath}|" "$CROSS_FILE" 2>/dev/null; then
-      old_count=$(grep -F "${filepath}|" "$CROSS_FILE" | head -1 | cut -d'|' -f2)
-      new_count=$((old_count + 1))
-      # Use awk + ENVIRON to avoid Windows path mangling
-      FILEPATH="$filepath" NEWCOUNT="$new_count" TODAY="$today" awk '
-        BEGIN { fp=ENVIRON["FILEPATH"]; nc=ENVIRON["NEWCOUNT"]; td=ENVIRON["TODAY"] }
-        index($0, fp"|") == 1 { print fp"|"nc"|"td; next }
-        { print }
-      ' "$CROSS_FILE" > "$CROSS_FILE.tmp.$$" && mv "$CROSS_FILE.tmp.$$" "$CROSS_FILE"
-    else
-      echo "${filepath}|1|${today}" >> "$CROSS_FILE"
-    fi
-  done <<< "$unique_files"
-fi
-
-# Prune cross-session entries older than 30 days
-cutoff=$(date -d "30 days ago" +%Y-%m-%d 2>/dev/null || date -v-30d +%Y-%m-%d 2>/dev/null || echo "")
-if [ -n "$cutoff" ] && [ -f "$CROSS_FILE" ]; then
-  CUTOFF="$cutoff" awk -F'|' '
-    /^#/ { print; next }
-    NF < 3 { print; next }
-    $3 >= ENVIRON["CUTOFF"] { print }
-  ' "$CROSS_FILE" > "$CROSS_FILE.tmp.$$" && mv "$CROSS_FILE.tmp.$$" "$CROSS_FILE"
-fi
+# Cross-session file tracking RETIRED (wave 5, locked D6): hot files are
+# derived at read from the week-bucket logs via eio_hot_files — no mutable
+# cross-session.local.md writer anywhere. Legacy files on disk are inert.
 
 # --- Dedup guard: per session_id (v2 rows), NOT date-wide (spec §6.1). A
 # health_written event on THIS session's own log is still the fast path;
