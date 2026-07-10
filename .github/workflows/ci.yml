@@ -18,6 +18,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # full history: test-old-cache-overlap.sh extracts pre-conversion
+          # commit 3522710 via git archive, which a shallow clone lacks
+          fetch-depth: 0
 
       - name: Run test suite
         run: bash tests/run-all.sh
