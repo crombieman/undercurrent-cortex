@@ -108,7 +108,11 @@ append_event() {
   [ -f "$file" ] || return 0
   value="${value//$'\r'/}"
   value="${value//$'\n'/ }"
-  printf '%s|%s|%s\n' "$(date +%s)" "$type" "$value" >> "$file"
+  # Deny-tolerant: cortex hooks also fire inside Codex sandboxes where the
+  # log may exist but not be writable (read-only runs). A denied append
+  # degrades to a silent no-op — never a crash under the callers' set -e
+  # (hook contract: always exit 0 with JSON).
+  printf '%s|%s|%s\n' "$(date +%s)" "$type" "$value" >> "$file" 2>/dev/null || true
 }
 
 # --- Readers: single-pass awk; NR (file) order authoritative; \r-tolerant ---

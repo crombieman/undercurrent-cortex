@@ -363,6 +363,26 @@ printf '1700000005|file_edit|r C:/p/x.ts
 report=$(eio_intervention_report_dirs "$IRD/.claude/cortex/sessions")
 assert_contains "ir_cautious_broken_by_churn" "$report" "cautious_mode|1|0"
 
+# --- append_event sandbox tolerance: a log that EXISTS but is not writable
+# (read-only sandbox — cortex hooks fire inside Codex sessions too) must
+# degrade to a silent no-op, not crash the caller under set -e (hook
+# contract: always exit 0 with JSON). If chmod is ineffective in some
+# environment the write just succeeds — the rc assertion is the contract.
+ROT=$(mktemp -d)
+ROLOG="$ROT/ro.events.log"
+printf '1700000001|session_start|2026-07-10T00:00:00Z m\n' > "$ROLOG"
+chmod 444 "$ROLOG" 2>/dev/null || true
+rc=0
+bash -c '
+  set -euo pipefail
+  source "$1"
+  EVENT_LOG="$2"
+  append_event tool_call Bash
+  echo survived
+' _ "$PLUGIN_ROOT/hooks/scripts/lib/event-io.sh" "$ROLOG" > /dev/null 2>&1 || rc=$?
+assert_eq "append_event_readonly_log_no_crash" "0" "$rc"
+chmod 644 "$ROLOG" 2>/dev/null || true
+
 # --- eio_hot_files (wave 5, spec §3.5 / locked D6): cross-session hot files
 # derived at read from week-bucket logs — the mutable cross-session.local.md
 # tracker is retired. Counting is DISTINCT sessions (per-log dedup), r-flag

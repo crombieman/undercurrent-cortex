@@ -261,7 +261,7 @@ HEADER
 fi
 
 # Append v2 data row.
-echo "v2|${today}|${SESSION_ID}|${commits}|${material_edits}|${fix_ratio}|${reverts}|${rework_files}|${tests_pass}|${duration_min}|${max_re_edits}|${topology}|${domain}|${self_misses}" >> "$HEALTH_FILE"
+echo "v2|${today}|${SESSION_ID}|${commits}|${material_edits}|${fix_ratio}|${reverts}|${rework_files}|${tests_pass}|${duration_min}|${max_re_edits}|${topology}|${domain}|${self_misses}" >> "$HEALTH_FILE" 2>/dev/null || true
 
 # v3's rolling-average recompute (trend_direction=/avg_*= header rewrite) is
 # GONE in v2 — trend is computed at READ time from v2 rows themselves

@@ -297,4 +297,24 @@ LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "codex-mention")
 run_post_bash "codex-mention" "rg codex-companion.mjs docs/" > /dev/null
 assert_eq "companion_mention_no_event" "0" "$(count_events codex_review '' '' "$LOG")"
 
+# --- Sandbox tolerance: a READ-ONLY journal must not crash the hook on a
+# commit command (cortex hooks fire inside Codex sandboxes; contract: exit 0
+# with valid JSON even when document writes are denied) ---
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "commit-rojournal")
+make_commit "feat: readonly journal test"
+mkdir -p "$_TEST_TMPDIR/memory"
+journal="$_TEST_TMPDIR/memory/$(date +%Y-%m-%d).md"
+echo "# Journal" > "$journal"
+chmod 444 "$journal" 2>/dev/null || true
+json=$(mock_json "session_id=commit-rojournal" "tool_input.command=git commit -m test")
+set +e
+result=$(echo "$json" | CORTEX_PROJECT_DIR_OVERRIDE="$_TEST_TMPDIR" \
+  bash "$PLUGIN_ROOT/hooks/scripts/post-bash-dispatch.sh" 2>/dev/null)
+rc=$?
+set -e
+chmod 644 "$journal" 2>/dev/null || true
+assert_eq "readonly_journal_exit_0" "0" "$rc"
+assert_contains "readonly_journal_still_valid_json" "$result" "{"
+
 end_suite

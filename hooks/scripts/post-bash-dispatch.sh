@@ -108,7 +108,9 @@ if echo "$command_str" | grep -qE '(^|[;&|[:space:]])git[[:space:]]+commit([[:sp
     if [ -f "$journal" ]; then
       msg=$(git -C "${PROJECT_DIR}" log -1 --pretty=format:"%s" 2>/dev/null || echo "commit")
       [ -z "$msg" ] && msg="commit"
-      printf '\n## %s - commit: %s\n' "$time_now" "$msg" >> "$journal"
+      # Deny-tolerant (read-only sandboxes): a denied journal write must not
+      # crash the hook — the systemMessage flow below still runs.
+      printf '\n## %s - commit: %s\n' "$time_now" "$msg" >> "$journal" 2>/dev/null || true
     fi
 
     # --- Conventional commit check + context prompt ---

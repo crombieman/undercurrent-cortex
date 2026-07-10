@@ -84,7 +84,7 @@ validate_organism() {
   # --- 3-4. Proposals + decisions file separator check ---
   for f in "$PROPOSALS_FILE" "$DECISIONS_FILE"; do
     if [ -f "$f" ] && ! grep -q '^---' "$f" 2>/dev/null; then
-      echo "---" >> "$f"
+      echo "---" >> "$f" 2>/dev/null || true
       issues=$((issues + 1))
       repairs=$((repairs + 1))
       details="${details}added separator to $(basename "$f"), "
