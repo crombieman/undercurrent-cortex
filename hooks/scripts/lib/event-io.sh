@@ -18,6 +18,18 @@ _eio_week_dir() {
   echo "$(_eio_sessions_dir)/$(date +%G-W%V 2>/dev/null || echo unknown)"
 }
 
+# _eio_sanitize_sid "<session_id>"
+# A session id becomes a filename component in every event-log path. Claude
+# supplies UUIDs, so separators and parent refs are always invalid; rejecting
+# them here keeps every caller under sessions/ without changing valid ids.
+_eio_sanitize_sid() {
+  local sid="${1:-}"
+  case "$sid" in
+    *"/"*|*"\\"*|*".."*) echo "" ;;
+    *) echo "$sid" ;;
+  esac
+}
+
 # _eio_extract_sid "<hook_stdin_json>"
 # Echoes the session_id from the hook JSON (empty string if absent/malformed).
 # 3-tier jq -> python3 -> POSIX-awk fallback (the awk tier must stand alone —
@@ -50,7 +62,7 @@ _eio_extract_sid() {
       }
     ' 2>/dev/null) || true
   fi
-  echo "$sid"
+  _eio_sanitize_sid "$sid"
 }
 
 # resolve_event_log "<hook_stdin_json>"

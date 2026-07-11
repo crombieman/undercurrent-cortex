@@ -47,6 +47,25 @@ resolve_event_log '{"no_sid":"here"}'
 assert_eq "resolve_missing_sid_blocks_appends" "" "$EVENT_LOG"
 unset CORTEX_PROJECT_DIR_OVERRIDE
 
+# --- resolve_event_log: path-traversal session_id is rejected (containment) ---
+# session_id is interpolated straight into the event-log FILE PATH; a value
+# carrying a separator or parent ref would escape the sessions/ tree. A rejected
+# (unattributable) sid must degrade to no-write (empty EVENT_LOG), never an
+# out-of-tree candidate path.
+TDIR_TRAV=$(mktemp -d)
+CORTEX_PROJECT_DIR_OVERRIDE="$TDIR_TRAV"
+resolve_event_log '{"session_id":"../../../../escaped"}'
+assert_eq "resolve_dotdot_sid_blocked" "" "$EVENT_LOG"
+resolve_event_log '{"session_id":"a/b/escaped"}'
+assert_eq "resolve_slash_sid_blocked" "" "$EVENT_LOG"
+resolve_event_log '{"session_id":"a\\b\\escaped"}'
+assert_eq "resolve_backslash_sid_blocked" "" "$EVENT_LOG"
+# A normal UUID-shaped sid still resolves to the in-tree candidate (not rejected)
+resolve_event_log '{"session_id":"c08c81f5-4a9e-4694-b503-6e93d6a27e8d"}'
+sid_contained=no; case "$EVENT_LOG" in "$TDIR_TRAV"/.claude/cortex/sessions/*) sid_contained=yes ;; esac
+assert_eq "resolve_uuid_sid_contained" "yes" "$sid_contained"
+unset CORTEX_PROJECT_DIR_OVERRIDE
+
 # --- count_events: basic + prefix filter ---
 EVENT_LOG=$(create_event_log "$TDIR/.claude" "s-count")
 append_event "file_edit" "r C:/a.ts"

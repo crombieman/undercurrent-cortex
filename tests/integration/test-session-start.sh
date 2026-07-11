@@ -78,6 +78,27 @@ else
 fi
 assert_eq "session_start_second_token_is_model" "unknown" "$ss_second"
 
+# --- Test 1b: a rejected traversal sid degrades to the epoch-PID fallback ---
+# session-start is the sole event-log creator, so unlike append-only callers it
+# must replace an unsafe sid instead of merely dropping the write. The fallback
+# must stay inside the current week bucket and the traversal target must never
+# appear outside sessions/.
+setup_opted_test
+traversal_sid="../../../../escaped"
+run_session_start "$(mock_json "session_id=$traversal_sid")" > /dev/null
+MARKER="$_TEST_TMPDIR/.claude/cortex/current-session.id"
+fallback_sid=$(cat "$MARKER" 2>/dev/null | tr -d '[:space:]')
+fallback_shape="invalid"
+if printf '%s' "$fallback_sid" | grep -qE '^[0-9]+-[0-9]+$'; then
+  fallback_shape="epoch-pid"
+fi
+assert_eq "traversal_sid_uses_epoch_pid_fallback" "epoch-pid" "$fallback_shape"
+assert_file_exists "traversal_sid_log_created_inside_sessions" \
+  "$(_eio_week_dir)/${fallback_sid}.events.log"
+escaped_outside="absent"
+[ -f "$_TEST_TMPDIR/escaped.events.log" ] && escaped_outside="present"
+assert_eq "traversal_sid_creates_no_outside_log" "absent" "$escaped_outside"
+
 # --- Test 2: mode_set / threshold_set / carry_over_age appended (defaults) ---
 setup_opted_test
 sid="ss-events"

@@ -72,6 +72,10 @@ if [ -n "$HOOK_INPUT" ]; then
     ' 2>/dev/null) || true
   fi
 fi
+# Reject any sid that could become more than one path component. event-io's
+# extractor applies the same guard for every append-only hook; session-start
+# mirrors it here because this hook extracts inline and creates the log.
+HOOK_SESSION_ID=$(_eio_sanitize_sid "$HOOK_SESSION_ID")
 # Fallback: epoch + PID if no session_id from Claude Code. The `-$$` suffix makes
 # concurrent boots in the same second collision-resistant (distinct log files).
 [ -z "$HOOK_SESSION_ID" ] && HOOK_SESSION_ID="$(date +%s)-$$"
