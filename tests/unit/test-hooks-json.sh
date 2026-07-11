@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # Validates hooks/hooks.json (Task 5: native hooks.json registration). All
-# validation logic lives in python3 (explicitly allowed in tests per
+# validation logic lives in Python (explicitly allowed in tests per
 # docs/skill-authoring.md / CLAUDE.md testing conventions) — hooks.json is a
 # structured document, and hand-rolled bash JSON parsing would be far more
 # fragile than the awk/grep string-matching used elsewhere in this repo for
 # hook *payloads*. The python3 script prints one tab-separated
 # "<test_name>\t<PASS|FAIL>\t<detail>" line per check; bash turns each into a
 # framework assertion so failures show up with the usual PASS/FAIL formatting
-# and roll into the suite's SUITE summary line.
+# and roll into the suite's SUITE summary line. Interpreter discovery executes
+# each candidate because command -v alone accepts dead Windows Store aliases.
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$TESTS_DIR/lib/test-framework.sh"
@@ -18,13 +19,45 @@ HOOKS_JSON="$PLUGIN_ROOT/hooks/hooks.json"
 
 begin_suite "hooks-json"
 
-if ! command -v python3 >/dev/null 2>&1; then
-  skip_test "hooks_json_validation" "python3 not available"
+# A command can exist on PATH yet still be non-executable (notably the Windows
+# Store python3 alias). Re-run this suite once with a shadow python3 that exits
+# 126: the runner must fall through or skip cleanly and still print its receipt.
+if [ "${HOOKS_JSON_ALIAS_PROBE_CHILD:-0}" != "1" ]; then
+  alias_bin="$_TEST_TMPDIR/python-alias"
+  mkdir -p "$alias_bin"
+  cat > "$alias_bin/python3" << 'ALIAS'
+#!/usr/bin/env bash
+exit 126
+ALIAS
+  chmod +x "$alias_bin/python3"
+  set +e
+  alias_output=$(PATH="$alias_bin:$PATH" HOOKS_JSON_ALIAS_PROBE_CHILD=1 bash "$0" 2>&1)
+  alias_rc=$?
+  set -e
+  assert_eq "dead_python3_alias_exits_cleanly" "0" "$alias_rc"
+  assert_contains "dead_python3_alias_emits_suite_receipt" "$alias_output" "SUITE hooks-json"
+fi
+
+PYTHON_CMD=()
+for candidate in python3 python; do
+  if command -v "$candidate" >/dev/null 2>&1 \
+     && "$candidate" -c 'pass' >/dev/null 2>&1; then
+    PYTHON_CMD=("$candidate")
+    break
+  fi
+done
+if [ "${#PYTHON_CMD[@]}" -eq 0 ] && command -v py >/dev/null 2>&1 \
+   && py -3 -c 'pass' >/dev/null 2>&1; then
+  PYTHON_CMD=(py -3)
+fi
+
+if [ "${#PYTHON_CMD[@]}" -eq 0 ]; then
+  skip_test "hooks_json_validation" "no executable Python interpreter available"
   end_suite
   exit 0
 fi
 
-results=$(HOOKS_JSON_PATH="$HOOKS_JSON" python3 <<'PYEOF'
+results=$(HOOKS_JSON_PATH="$HOOKS_JSON" "${PYTHON_CMD[@]}" <<'PYEOF'
 import json
 import os
 import sys
