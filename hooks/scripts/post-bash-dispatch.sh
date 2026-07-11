@@ -41,11 +41,11 @@ if [ -n "$test_framework" ] && [ -n "$EVENT_LOG" ] && [ -f "$EVENT_LOG" ]; then
 fi
 
 # --- Pattern: Codex review invocation (spec §5.6, D7/L9) ---
-# `codex` as a standalone word (boundary form keeps codexify/mycodex out), OR
-# the companion runtime file. Either the dispatch step or the harvest step
-# counts — both prove the review loop was exercised this session. Consumed by
-# the stop-gate Codex reminder and the codex_reminder follow-through scoring.
-if echo "$command_str" | grep -qE '(^|[;&|[:space:]])codex([[:space:]]|$)|(^|[;&|[:space:]])node[[:space:]][^;&|]*codex-companion\.mjs'; then
+# Require `codex`/`node` at a shell-command boundary plus a non-option Codex
+# subcommand. This keeps echo/prose mentions, version/help probes, and a bare
+# binary from forging a review while preserving direct and chained invocations.
+# Consumed by the stop-gate reminder and codex_reminder follow-through scoring.
+if echo "$command_str" | grep -qE '(^|[;&|])[[:space:]]*codex[[:space:]]+[^-;&|[:space:]][^;&|[:space:]]*|(^|[;&|])[[:space:]]*node[[:space:]][^;&|]*codex-companion\.mjs'; then
   if [ -n "$EVENT_LOG" ] && [ -f "$EVENT_LOG" ]; then
     append_event "codex_review" "cli"
   fi

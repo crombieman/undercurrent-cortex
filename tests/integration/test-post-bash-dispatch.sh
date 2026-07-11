@@ -260,7 +260,34 @@ assert_eq "genuinely_new_commit_still_logged" "2" "$(count_events commit '' '' "
 
 # --- Codex review detection (spec §5.6, D7/L9, T6) ---
 
-# Bare `codex` CLI invocation → codex_review event, value "cli"
+# Non-prompting CLI probes do not prove a review happened.
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "codex-version")
+run_post_bash "codex-version" "codex --version" > /dev/null
+assert_eq "codex_version_no_review_event" "0" "$(count_events codex_review '' '' "$LOG")"
+
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "codex-help")
+run_post_bash "codex-help" "codex --help" > /dev/null
+assert_eq "codex_help_no_review_event" "0" "$(count_events codex_review '' '' "$LOG")"
+
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "codex-bare")
+run_post_bash "codex-bare" "codex" > /dev/null
+assert_eq "bare_codex_no_review_event" "0" "$(count_events codex_review '' '' "$LOG")"
+
+# Command text that merely mentions an invocation is not itself an invocation.
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "codex-echo-mention")
+run_post_bash "codex-echo-mention" "echo codex exec review" > /dev/null
+assert_eq "echo_codex_exec_no_review_event" "0" "$(count_events codex_review '' '' "$LOG")"
+
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "companion-echo-mention")
+run_post_bash "companion-echo-mention" "echo node C:/tools/codex-companion.mjs result task-42" > /dev/null
+assert_eq "echo_companion_no_review_event" "0" "$(count_events codex_review '' '' "$LOG")"
+
+# Prompt-bearing `codex exec` invocation → codex_review event, value "cli"
 setup_test
 LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "codex-cli")
 run_post_bash "codex-cli" "codex exec 'review the wave 4 diff'" > /dev/null
