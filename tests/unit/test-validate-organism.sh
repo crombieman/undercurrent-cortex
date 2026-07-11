@@ -31,18 +31,87 @@ long_str=$(printf '%0.s-' {1..201})
 result=$(sanitize_json_field "$long_str")
 assert_eq "sanitize_json_field_too_long" "" "$result"
 
-# --- validate_organism: health header recovery ---
+# --- validate_organism: a well-formed v2 header is already healthy ---
 setup_test
 override_state_paths "$_TEST_TMPDIR"
-echo "# Health Log" > "$HEALTH_FILE"
-echo "---" >> "$HEALTH_FILE"
+cat > "$HEALTH_FILE" << 'HEALTH'
+# Cortex Health Log
+# Fields: v2|date|session_id|commits|material_edits|fix_ratio|reverts|rework_files|tests_pass|duration_min|max_re_edits|topology|domain|self_misses
+v2|2026-07-10|healthy-sid|1|2|0.00|0|0|pass|5|1|focused|hooks|0
+HEALTH
+sf=$(create_state_file "$_TEST_TMPDIR/.claude" "health-v2-intact")
+STATE_FILE="$sf"
+health_result=$(validate_organism 2>/dev/null || echo "0|0|")
+assert_eq "validate_v2_health_header_zero_issues" "0" "$(echo "$health_result" | cut -d'|' -f1)"
+
+# A signature embedded in a corrupt line is not an intact header. The
+# predicate must match the canonical line start, not mere substring presence.
+setup_test
+override_state_paths "$_TEST_TMPDIR"
+cat > "$HEALTH_FILE" << 'HEALTH'
+# Cortex Health Log
+corrupt # Fields: v2|date|session_id
+v2|2026-07-10|embedded-sig|1|2|0.00|0|0|pass|5|1|focused|hooks|0
+HEALTH
+sf=$(create_state_file "$_TEST_TMPDIR/.claude" "health-v2-corrupt-signature")
+STATE_FILE="$sf"
+health_result=$(validate_organism 2>/dev/null || echo "0|0|")
+assert_eq "validate_corrupt_v2_signature_reports_issue" "1" "$(echo "$health_result" | cut -d'|' -f1)"
+assert_eq "validate_corrupt_v2_signature_rebuilds_canonical_line" "1" \
+  "$(grep -c '^# Fields: v2|' "$HEALTH_FILE" 2>/dev/null || echo 0)"
+
+# The canonical v2 header is two exact lines. A file with the Fields line but
+# no title is still headerless and must be rebuilt.
+setup_test
+override_state_paths "$_TEST_TMPDIR"
+cat > "$HEALTH_FILE" << 'HEALTH'
+# Fields: v2|date|session_id|commits|material_edits|fix_ratio|reverts|rework_files|tests_pass|duration_min|max_re_edits|topology|domain|self_misses
+v2|2026-07-10|titleless|1|2|0.00|0|0|pass|5|1|focused|hooks|0
+HEALTH
+sf=$(create_state_file "$_TEST_TMPDIR/.claude" "health-v2-titleless")
+STATE_FILE="$sf"
+health_result=$(validate_organism 2>/dev/null || echo "0|0|")
+assert_eq "validate_titleless_v2_header_reports_issue" "1" "$(echo "$health_result" | cut -d'|' -f1)"
+assert_eq "validate_titleless_v2_header_restores_title" "1" \
+  "$(grep -cxF '# Cortex Health Log' "$HEALTH_FILE" 2>/dev/null || echo 0)"
+
+# A truncated Fields line shares the v2 prefix but not the full contract.
+setup_test
+override_state_paths "$_TEST_TMPDIR"
+cat > "$HEALTH_FILE" << 'HEALTH'
+# Cortex Health Log
+# Fields: v2|date|session_id
+v2|2026-07-10|truncated-fields|1|2|0.00|0|0|pass|5|1|focused|hooks|0
+HEALTH
+sf=$(create_state_file "$_TEST_TMPDIR/.claude" "health-v2-truncated-fields")
+STATE_FILE="$sf"
+health_result=$(validate_organism 2>/dev/null || echo "0|0|")
+assert_eq "validate_truncated_v2_header_reports_issue" "1" "$(echo "$health_result" | cut -d'|' -f1)"
+assert_file_contains "validate_truncated_v2_header_restores_fields" "$HEALTH_FILE" \
+  "# Fields: v2|date|session_id|commits|material_edits|fix_ratio|reverts|rework_files|tests_pass|duration_min|max_re_edits|topology|domain|self_misses"
+
+# --- validate_organism: corrupt health header rebuilds canonical v2 header ---
+setup_test
+override_state_paths "$_TEST_TMPDIR"
+cat > "$HEALTH_FILE" << 'HEALTH'
+# Cortex Health Log
+v2|2026-07-10|repair-sid|1|2|0.00|0|0|pass|5|1|focused|hooks|0
+2026-06-01|0|1.0|true|0|0|0|0|10|1|focused|legacy
+HEALTH
 sf=$(create_state_file "$_TEST_TMPDIR/.claude" "health-header")
 STATE_FILE="$sf"
 validate_organism 2>/dev/null || true
 if [ -f "$HEALTH_FILE" ]; then
-  assert_file_contains "validate_health_header_recovery" "$HEALTH_FILE" "trend_direction="
+  assert_file_contains "validate_health_header_recovery_v2_fields" "$HEALTH_FILE" \
+    "# Fields: v2|date|session_id|commits|material_edits|fix_ratio|reverts|rework_files|tests_pass|duration_min|max_re_edits|topology|domain|self_misses"
+  assert_file_contains "validate_health_header_recovery_title" "$HEALTH_FILE" "# Cortex Health Log"
+  assert_file_contains "validate_health_header_recovery_v2_row" "$HEALTH_FILE" "v2|2026-07-10|repair-sid"
+  assert_file_contains "validate_health_header_recovery_legacy_row" "$HEALTH_FILE" "2026-06-01|0|1.0"
 else
-  skip_test "validate_health_header_recovery" "health file not created"
+  skip_test "validate_health_header_recovery_v2_fields" "health file not created"
+  skip_test "validate_health_header_recovery_title" "health file not created"
+  skip_test "validate_health_header_recovery_v2_row" "health file not created"
+  skip_test "validate_health_header_recovery_legacy_row" "health file not created"
 fi
 
 # --- validate_organism: health file pruning keeps last 200 rows ---
@@ -61,8 +130,9 @@ override_state_paths "$_TEST_TMPDIR"
 sf=$(create_state_file "$_TEST_TMPDIR/.claude" "health-prune")
 STATE_FILE="$sf"
 validate_organism 2>/dev/null || true
-data_row_count=$(grep -c '|' "$HEALTH_FILE" 2>/dev/null || echo 0)
+data_row_count=$(grep -Ec '^(v2|[0-9]{4}-[0-9]{2}-[0-9]{2})\|' "$HEALTH_FILE" 2>/dev/null || echo 0)
 assert_eq "validate_health_pruning_keeps_200_rows" "200" "$data_row_count"
+assert_file_contains "validate_health_pruning_keeps_v2_header" "$HEALTH_FILE" "# Fields: v2|date|session_id"
 
 # --- validate_organism: stale temp cleanup ---
 setup_test

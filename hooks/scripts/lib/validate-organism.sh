@@ -40,16 +40,17 @@ validate_organism() {
 
   # --- 1. Health file header recovery ---
   if [ -f "$HEALTH_FILE" ]; then
-    if ! grep -q '^trend_direction=' "$HEALTH_FILE" 2>/dev/null; then
-      # Extract data rows (contain |), rebuild header + data
+    local health_title="# Cortex Health Log"
+    local health_fields="# Fields: v2|date|session_id|commits|material_edits|fix_ratio|reverts|rework_files|tests_pass|duration_min|max_re_edits|topology|domain|self_misses"
+    if ! grep -qxF "$health_title" "$HEALTH_FILE" 2>/dev/null \
+       || ! grep -qxF "$health_fields" "$HEALTH_FILE" 2>/dev/null; then
+      # Preserve only real v2 or legacy date rows. A broad pipe match also
+      # captures the v2 Fields line and would duplicate it during a rebuild.
       local data_rows
-      data_rows=$(grep '|' "$HEALTH_FILE" 2>/dev/null || echo "")
+      data_rows=$(awk '/^v2\|/ || /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\|/ { print }' "$HEALTH_FILE" 2>/dev/null || echo "")
       {
-        echo "trend_direction=stable"
-        echo "avg_reasoning_misses=0.0"
-        echo "avg_edits_per_commit=0.0"
-        echo "avg_duration_min=0"
-        echo "---"
+        echo "$health_title"
+        echo "$health_fields"
         if [ -n "$data_rows" ]; then
           echo "$data_rows"
         fi
@@ -65,10 +66,11 @@ validate_organism() {
     local total_lines=0
     total_lines=$(wc -l < "$HEALTH_FILE" | tr -d ' ')
     if [ "${total_lines:-0}" -gt 500 ]; then
-      # Keep header (non-pipe lines before first pipe line) + last 200 data rows
+      # Keep the canonical header + last 200 real v2/legacy data rows. The v2
+      # Fields line itself contains pipes, so "first pipe" is not a row boundary.
       local header_lines data_rows
-      header_lines=$(awk '/\|/ { exit } { print }' "$HEALTH_FILE")
-      data_rows=$(grep '|' "$HEALTH_FILE" 2>/dev/null | tail -200)
+      header_lines=$(awk '/^v2\|/ || /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\|/ { exit } { print }' "$HEALTH_FILE")
+      data_rows=$(awk '/^v2\|/ || /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\|/ { print }' "$HEALTH_FILE" | tail -200)
       {
         echo "$header_lines"
         if [ -n "$data_rows" ]; then
