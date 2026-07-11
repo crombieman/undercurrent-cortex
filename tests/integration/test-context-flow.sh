@@ -42,6 +42,10 @@ run_context_flow() {
 setup_test
 result=$(run_context_flow "update the scoring engine")
 assert_contains "scoring_keyword" "$result" "Scoring architecture"
+assert_contains "scoring_uses_hook_specific_output" "$result" '"hookSpecificOutput"'
+assert_contains "scoring_names_user_prompt_submit" "$result" '"hookEventName":"UserPromptSubmit"'
+assert_contains "scoring_uses_additional_context" "$result" '"additionalContext"'
+assert_not_contains "scoring_omits_display_only_system_message" "$result" '"systemMessage"'
 
 # Test 2: "migration" injects migration-lessons content
 setup_test
@@ -276,5 +280,16 @@ create_event_log "$_TEST_TMPDIR/.claude" "ctx-prompt-field" > /dev/null
 json=$(mock_json "prompt=fix the goroutine leak" "session_id=ctx-prompt-field")
 result=$(echo "$json" | bash "$SANDBOX/hooks/scripts/context-flow.sh" 2>/dev/null || true)
 assert_contains "prompt_field_name_injects" "$result" "Go patterns"
+
+# Test 35: every model-facing emit uses the UserPromptSubmit additionalContext
+# contract. Runtime coverage above proves the shape carries real escaped content;
+# this count pins every early-return branch so a display-only systemMessage cannot
+# survive in a less common sensory/proposal/cautious path.
+setup_test
+legacy_emit_count=$(grep -c 'printf.*systemMessage' "$PLUGIN_ROOT/hooks/scripts/context-flow.sh" 2>/dev/null || true)
+additional_emit_count=$(grep -c 'printf.*hookSpecificOutput.*UserPromptSubmit.*additionalContext' \
+  "$PLUGIN_ROOT/hooks/scripts/context-flow.sh" 2>/dev/null || true)
+assert_eq "all_context_flow_emits_drop_system_message" "0" "$legacy_emit_count"
+assert_eq "all_context_flow_emits_use_additional_context" "9" "$additional_emit_count"
 
 end_suite

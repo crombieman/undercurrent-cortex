@@ -3,7 +3,7 @@ set -euo pipefail
 # Circulatory System — deterministic keyword-matching context injector.
 # UserPromptSubmit command hook (async: false).
 # Reads user_prompt from stdin JSON, matches against keyword lists,
-# returns matching context file as systemMessage. First match wins.
+# returns matching context file as model-facing additionalContext. First match wins.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$SCRIPT_DIR/lib/event-io.sh" || { printf '{}'; exit 0; }
@@ -146,7 +146,7 @@ if [[ "$PADDED" == *" ci "* ]] || [[ "$PROMPT_LOWER" == *"pipeline status"* ]] \
   fi
   if [ -n "$sensory_output" ]; then
     ESCAPED=$(escape_for_json "$sensory_output")
-    printf '{"systemMessage":"%s"}' "$ESCAPED"
+    printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}' "$ESCAPED"
     exit 0
   fi
   # Fall through to empty if no sensory output
@@ -157,7 +157,7 @@ elif [[ "$PROMPT_LOWER" == *"[decision]"* ]] || [[ "$PROMPT_LOWER" == *"decision
      || [[ "$PROMPT_LOWER" == *"i decided"* ]] || [[ "$PROMPT_LOWER" == *"we decided"* ]]; then
   MSG="Decision detected. Log it with metadata:\n- Category: architecture / data / UX / pipeline / security\n- Reversibility: easy / hard / irreversible\n- Confidence: high / medium / low\nWrite entry to .claude/cortex/decisions.local.md with format:\n## YYYY-MM-DD - [title]\ncategory=[cat] reversibility=[rev] confidence=[conf]\n[description]"
   ESCAPED=$(escape_for_json "$MSG")
-  printf '{"systemMessage":"%s"}' "$ESCAPED"
+  printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}' "$ESCAPED"
   exit 0
 
 elif [[ "$PROFILE" = "strict" ]] && { [[ "$PROMPT_LOWER" == *"approve proposal"* ]] || [[ "$PROMPT_LOWER" == *"accept proposal"* ]] \
@@ -170,7 +170,7 @@ elif [[ "$PROFILE" = "strict" ]] && { [[ "$PROMPT_LOWER" == *"approve proposal"*
     apply_output="apply-proposal.sh not found."
   fi
   ESCAPED=$(escape_for_json "${apply_output:-No pending proposals found.}")
-  printf '{"systemMessage":"%s"}' "$ESCAPED"
+  printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}' "$ESCAPED"
   exit 0
 
 elif [[ "$PROFILE" = "strict" ]] && { [[ "$PROMPT_LOWER" == *"reject proposal"* ]] || [[ "$PROMPT_LOWER" == *"dismiss proposal"* ]] \
@@ -182,7 +182,7 @@ elif [[ "$PROFILE" = "strict" ]] && { [[ "$PROMPT_LOWER" == *"reject proposal"* 
     apply_output="apply-proposal.sh not found."
   fi
   ESCAPED=$(escape_for_json "${apply_output:-No pending proposals found.}")
-  printf '{"systemMessage":"%s"}' "$ESCAPED"
+  printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}' "$ESCAPED"
   exit 0
 
 elif [[ "$PROFILE" = "strict" ]] && { [[ "$PROMPT_LOWER" == *"show proposals"* ]] || [[ "$PROMPT_LOWER" == *"list proposals"* ]] \
@@ -200,7 +200,7 @@ elif [[ "$PROFILE" = "strict" ]] && { [[ "$PROMPT_LOWER" == *"show proposals"* ]
   else
     ESCAPED=$(escape_for_json "No proposals file exists.")
   fi
-  printf '{"systemMessage":"%s"}' "$ESCAPED"
+  printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}' "$ESCAPED"
   exit 0
 
 elif [[ "$PROMPT_LOWER" == *"done for today"* ]] || [[ "$PROMPT_LOWER" == *"wrap up"* ]] \
@@ -209,7 +209,7 @@ elif [[ "$PROMPT_LOWER" == *"done for today"* ]] || [[ "$PROMPT_LOWER" == *"wrap
      || [[ "$PROMPT_LOWER" == *"calling it"* ]]; then
   MSG="Remember to invoke the session-end skill before closing. Run: /cortex:session-end"
   ESCAPED=$(escape_for_json "$MSG")
-  printf '{"systemMessage":"%s"}' "$ESCAPED"
+  printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}' "$ESCAPED"
   exit 0
 fi
 
@@ -219,20 +219,20 @@ if [ -z "$CONTEXT_FILE" ] || [ ! -f "$CONTEXT_FILE" ]; then
   if [ -n "$CAUTIOUS_MSG" ]; then
     append_event "intervention" "cautious_mode"
     ESCAPED=$(escape_for_json "$CAUTIOUS_MSG")
-    printf '{"systemMessage":"%s"}' "$ESCAPED"
+    printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}' "$ESCAPED"
     exit 0
   fi
   printf '{}'
   exit 0
 fi
 
-# Read context file and return as systemMessage
+# Read context file and return as model-facing additionalContext
 CONTENT=$(cat "$CONTEXT_FILE" 2>/dev/null) || true
 if [ -z "$CONTENT" ]; then
   if [ -n "$CAUTIOUS_MSG" ]; then
     append_event "intervention" "cautious_mode"
     ESCAPED=$(escape_for_json "$CAUTIOUS_MSG")
-    printf '{"systemMessage":"%s"}' "$ESCAPED"
+    printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}' "$ESCAPED"
     exit 0
   fi
   printf '{}'
@@ -246,5 +246,5 @@ if [ -n "$CAUTIOUS_MSG" ]; then
 fi
 
 ESCAPED=$(escape_for_json "$CONTENT")
-printf '{"systemMessage":"%s"}' "$ESCAPED"
+printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}' "$ESCAPED"
 exit 0
