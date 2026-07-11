@@ -104,15 +104,23 @@ resolve_event_log_readonly() {
 # makes mid-session opt-in inert and blocks writes in un-opted repos.
 append_event() {
   local type="$1" value="${2:-}" file="$EVENT_LOG"
+  EIO_APPEND_FAILED=""
   [ -n "$file" ] || return 0
   [ -f "$file" ] || return 0
   value="${value//$'\r'/}"
   value="${value//$'\n'/ }"
   # Deny-tolerant: cortex hooks also fire inside Codex sandboxes where the
   # log may exist but not be writable (read-only runs). A denied append
-  # degrades to a silent no-op — never a crash under the callers' set -e
-  # (hook contract: always exit 0 with JSON).
-  printf '%s|%s|%s\n' "$(date +%s)" "$type" "$value" >> "$file" 2>/dev/null || true
+  # degrades to a no-op — never a crash under the callers' set -e (hook
+  # contract: always exit 0 with JSON). BUT it is not fully silent: callers
+  # whose CONTROL FLOW depends on the event persisting (stop-gate's
+  # escape-hatch counter, plan-guard's deny-once) MUST check
+  # EIO_APPEND_FAILED and fail OPEN when set — an unpersisted block/deny
+  # would otherwise repeat forever (W5 review I-1).
+  if ! printf '%s|%s|%s\n' "$(date +%s)" "$type" "$value" >> "$file" 2>/dev/null; then
+    EIO_APPEND_FAILED=1
+  fi
+  return 0
 }
 
 # --- Readers: single-pass awk; NR (file) order authoritative; \r-tolerant ---
@@ -387,13 +395,17 @@ eio_hot_files() {
     {
       # uniq -c: leading spaces, count, single space, then the path verbatim
       # (substr reconstruction — field splitting would mangle spaced paths).
+      # Output is count|path — COUNT FIRST (W5 review I-3): log values (and
+      # therefore paths) may contain pipes, so the path must be the tail
+      # after the FIRST pipe, never a positional field, and the sort key
+      # stays unambiguous.
       if (!match($0, /^[[:space:]]*[0-9]+ /)) next
       c = substr($0, 1, RLENGTH - 1)
       gsub(/[[:space:]]/, "", c)
       p = substr($0, RLENGTH + 1)
-      if (c + 0 >= ENVIRON["MINS"] + 0) printf "%s|%d\n", p, c
+      if (c + 0 >= ENVIRON["MINS"] + 0) printf "%d|%s\n", c, p
     }
-  ' | sort -t'|' -k2,2nr
+  ' | sort -t'|' -k1,1nr
 }
 
 # eio_unresolved_items <file> [file...]

@@ -61,6 +61,14 @@ if [ -f "$file_path" ]; then
       exit 0
     fi
     append_event "plan_guard_denied" "$file_path"
+    if [ "${EIO_APPEND_FAILED:-}" = "1" ]; then
+      # Fail OPEN (W5 review I-1): deny-once lives in the log; if the deny
+      # event can't persist (read-only log), denying would repeat forever.
+      # Warn without blocking instead.
+      msg=$(escape_for_json "WARNING: overwriting plan file '${file_path##*/}' (${line_count} lines) — deny-once state not persistable this session; proceeding without a block.")
+      printf '{"systemMessage":"%s"}' "$msg"
+      exit 0
+    fi
     msg=$(escape_for_json "BLOCKED: Plan file '${file_path##*/}' already has ${line_count} lines of content. Read it first before overwriting to verify you are not destroying a previous plan. Use the Read tool to review existing content.")
     printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"},"systemMessage":"%s"}' "$msg"
     exit 0

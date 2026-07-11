@@ -163,6 +163,20 @@ else
   assert_eq "week_dir_pruning_symlink_guard_line_exists" "present" "$guard_present"
 fi
 
+# --- Honest repair reporting (W5 review M-1): a DENIED separator append must
+# not be reported as a successful repair (issue counted, repair not) ---
+setup_test
+override_state_paths "$_TEST_TMPDIR"
+mkdir -p "$(dirname "$PROPOSALS_FILE")"
+printf 'id=x
+status=pending
+' > "$PROPOSALS_FILE"
+chmod 444 "$PROPOSALS_FILE" 2>/dev/null || true
+ro_result=$(validate_organism 2>/dev/null || echo "0|0|")
+chmod 644 "$PROPOSALS_FILE" 2>/dev/null || true
+ro_details=$(echo "$ro_result" | cut -d'|' -f3-)
+assert_not_contains "denied_separator_not_claimed_repaired" "$ro_details" "added separator to proposals.local.md"
+
 unset CORTEX_PROJECT_DIR_OVERRIDE
 
 end_suite

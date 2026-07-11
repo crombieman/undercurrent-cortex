@@ -27,6 +27,25 @@ run_plan_guard() {
   echo "$json_input" | bash "$SANDBOX/hooks/scripts/plan-file-guard.sh" 2>/dev/null || true
 }
 
+# Fail-open when deny-once state can't persist (W5 review I-1): a read-only
+# log means plan_guard_denied never lands, so "blocks once" would become an
+# INDEFINITE deny. Warn without blocking instead.
+setup_test
+plan_file="$_TEST_TMPDIR/.claude/plans/ro-plan.md"
+mkdir -p "$_TEST_TMPDIR/.claude/plans"
+for i in $(seq 1 60); do
+  echo "Line $i of the existing plan" >> "$plan_file"
+done
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "pg-ro")
+chmod 444 "$LOG" 2>/dev/null || true
+json=$(mock_json "tool_name=Write" "session_id=pg-ro" \
+  "tool_input.file_path=$plan_file" \
+  "tool_input.content=Overwritten content")
+result=$(run_plan_guard "$json")
+chmod 644 "$LOG" 2>/dev/null || true
+assert_not_contains "readonly_log_no_deny" "$result" "\"permissionDecision\":\"deny\""
+assert_contains "readonly_log_warns_instead" "$result" "WARNING"
+
 # Test 1: Block overwrite of existing plan with >50 lines
 setup_test
 plan_file="$_TEST_TMPDIR/.claude/plans/design-feature.md"

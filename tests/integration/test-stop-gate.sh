@@ -493,4 +493,17 @@ result=$(run_stop_gate "codex-gate-once")
 assert_contains "codex_gate_second_stop_still_reminds" "$result" "Codex review not dispatched"
 assert_eq "codex_intervention_once_per_session" "1" "$(count_events intervention codex_reminder '' "$LOG")"
 
+# --- Fail-open when block state can't persist (W5 review I-1): a read-only
+# log means stop_blocked never lands, so the 2-block escape hatch could never
+# fire and decision:block would repeat FOREVER. Degrade to a non-blocking
+# systemMessage instead. ---
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "ro-log-failopen")
+seed_file_edit "$LOG" "r" "${_TEST_TMPDIR}/src/blocked.ts"
+chmod 444 "$LOG" 2>/dev/null || true
+result=$(run_stop_gate "ro-log-failopen")
+chmod 644 "$LOG" 2>/dev/null || true
+assert_not_contains "readonly_log_never_blocks" "$result" "\"decision\":\"block\""
+assert_contains "readonly_log_warns_instead" "$result" "systemMessage"
+
 end_suite

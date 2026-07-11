@@ -245,6 +245,15 @@ fi
 # --- DECISION ---
 if [ -n "$failures" ]; then
   append_event "stop_blocked" "$blocked_gates"
+  if [ "${EIO_APPEND_FAILED:-}" = "1" ]; then
+    # Fail OPEN (W5 review I-1): the escape-hatch counter lives in the log;
+    # if stop_blocked can't persist (read-only log — e.g. a sandboxed Codex
+    # run), a decision:block would repeat FOREVER with no 2-block
+    # force-approval possible. Degrade to a non-blocking reminder.
+    msg=$(escape_for_json "Stop obligations unmet (session state not persistable — sandboxed run?):\n${failures}${reminders:+\nReminders (non-blocking):\n${reminders}}")
+    printf '{"systemMessage":"%s"}' "$msg"
+    exit 0
+  fi
   [ "${CORTEX_DEBUG:-}" = "true" ] && echo "stop-gate: BLOCKED — gates: ${blocked_gates}" >&2
 
   reason_text="Stop blocked. Address obligations above, then stop again to override.\nUnmet gates:\n${failures}"

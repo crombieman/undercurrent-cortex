@@ -436,7 +436,9 @@ fi
 # Recurring file edits — derived at read from the week-bucket logs (wave 5,
 # locked D6: the mutable cross-session.local.md tracker is retired; a legacy
 # file on disk is inert — no reader, no writer).
-hot_files=$(eio_hot_files 30 4 | awk -F'|' '{ printf "  - %s (%s sessions)\n", $1, $2 }')
+# Protocol is count|path (count first): the path is everything after the
+# FIRST pipe — paths may themselves contain pipes (W5 review I-3).
+hot_files=$(eio_hot_files 30 4 | awk '{ i = index($0, "|"); if (i == 0) next; printf "  - %s (%s sessions)\n", substr($0, i + 1), substr($0, 1, i - 1) }')
 if [ -n "$hot_files" ]; then
   social_warnings="${social_warnings}Frequently edited files (4+ sessions):"$'\n'"${hot_files}"$'\n'"Consider if these need a deeper refactor."$'\n'
 fi

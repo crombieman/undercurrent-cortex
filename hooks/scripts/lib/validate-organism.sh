@@ -84,10 +84,14 @@ validate_organism() {
   # --- 3-4. Proposals + decisions file separator check ---
   for f in "$PROPOSALS_FILE" "$DECISIONS_FILE"; do
     if [ -f "$f" ] && ! grep -q '^---' "$f" 2>/dev/null; then
-      echo "---" >> "$f" 2>/dev/null || true
       issues=$((issues + 1))
-      repairs=$((repairs + 1))
-      details="${details}added separator to $(basename "$f"), "
+      # Honest tally (W5 review M-1): only report the repair if the write
+      # actually landed — a denied append (read-only sandbox) leaves the
+      # issue counted but unrepaired.
+      if echo "---" >> "$f" 2>/dev/null; then
+        repairs=$((repairs + 1))
+        details="${details}added separator to $(basename "$f"), "
+      fi
     fi
   done
 

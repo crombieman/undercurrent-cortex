@@ -416,13 +416,26 @@ hf_log "2026-W99/h4" \
   "1700000004|file_edit|r C:/p/src/hot.ts" \
   "1700000005|file_edit|x C:/ext/xfile.ts" \
   "1700000006|file_edit|r C:/p/.claude/exemplars/e.ts"
+# Output protocol is count|path (COUNT FIRST — W5 review I-3): the path is
+# everything after the first pipe, so paths containing pipes stay parseable
+# and the numeric sort key is unambiguous.
 report=$(eio_hot_files 30 4 "$HFD/s")
-assert_contains "hot_files_4_distinct_sessions_listed" "$report" "C:/p/src/hot.ts|4"
+assert_contains "hot_files_4_distinct_sessions_listed" "$report" "4|C:/p/src/hot.ts"
 assert_not_contains "hot_files_3_sessions_omitted" "$report" "warm.ts"
 assert_not_contains "hot_files_x_flag_omitted" "$report" "xfile.ts"
 assert_not_contains "hot_files_plugin_paths_omitted" "$report" ".claude/exemplars"
 report=$(eio_hot_files 30 3 "$HFD/s")
-assert_contains "hot_files_min_sessions_override" "$report" "C:/p/src/warm.ts|3"
+assert_contains "hot_files_min_sessions_override" "$report" "3|C:/p/src/warm.ts"
+
+# Pipe-containing path (legal on the ubuntu CI leg; log VALUES may always
+# contain pipes) survives the protocol end to end
+for hlog in h1 h2 h3 h4; do
+  for d in "$HFD/s"/*/; do
+    [ -f "$d${hlog}.events.log" ] && printf '1700000009|file_edit|r C:/p/src/a|b.ts\n' >> "$d${hlog}.events.log"
+  done
+done
+report=$(eio_hot_files 30 4 "$HFD/s")
+assert_contains "hot_files_piped_path_preserved" "$report" "4|C:/p/src/a|b.ts"
 
 # journal_checkpoint 10th-tool boundary (Codex W4 review I-4): the journal
 # Write's OWN tool_call is logged before its journal_edit, so a journal edit

@@ -128,8 +128,8 @@ When Claude tries to end the session (Stop event), the gates run. Gates are **ho
 
 | Gate | What it checks | Class |
 |------|---------------|-------|
-| 1 | Uncommitted changes (event-derived count, cross-checked against real `git status`) | **Blocks** |
-| 3 | No test run since the *last source edit* (language-aware; only when a test ecosystem is detectable — otherwise reminds) | **Blocks** |
+| 1 | Uncommitted changes to *tracked* files (event-derived count, cross-checked against real `git status`; brand-new untracked files don't count) | **Blocks** |
+| 3 | No test run since the *last source edit* — fires only when 4+ distinct files were edited AND a test ecosystem is detectable (otherwise reminds) | **Blocks** |
 | 4 | Carry-over items from prior session not addressed | **Blocks** |
 | 5 | Stale carry-over unresolved for 3+ sessions | **Blocks** |
 | 2 | Docs not updated after architectural changes (only if `architectural_patterns` is configured) | Reminds |
@@ -249,8 +249,8 @@ The honest ledger. "Blocks" means a hard deny or a blocked Stop; everything else
 
 | Mechanism | Class | Notes |
 |-----------|-------|-------|
-| Stop Gate 1 — uncommitted work | **Blocks** | Event-derived, cross-checked against `git status` |
-| Stop Gate 3 — tests since last source edit | **Blocks** | Only when a test ecosystem is detectable; otherwise reminds |
+| Stop Gate 1 — uncommitted work | **Blocks** | Tracked changes only (untracked-only sessions pass); cross-checked against `git status` |
+| Stop Gate 3 — tests since last source edit | **Blocks** | Only with 4+ files edited AND a detectable test ecosystem; otherwise reminds |
 | Stop Gates 4/5 — carry-over / stale carry-over | **Blocks** | Escape hatch after 2 consecutive blocks |
 | Migration linter — `now()` etc. in migrations | **Blocks** | PreToolUse deny |
 | Plan-file guard — overwriting an existing plan | **Blocks once** | Same-path retry allowed (deliberate rewrite) |

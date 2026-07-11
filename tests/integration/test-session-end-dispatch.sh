@@ -175,6 +175,25 @@ before=$(cat "$cross_file")
 run_session_end "se-cross-legacy" > /dev/null
 assert_eq "legacy_cross_session_file_untouched" "$before" "$(cat "$cross_file")"
 
+# --- Retry-safe health row (W5 review I-2): when the row cannot be written
+# (HEALTH_FILE is a directory here — unwritable on every platform), the hook
+# must still exit 0 with JSON AND must NOT record health_written, so the next
+# SessionEnd retries instead of skipping the row forever. ---
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "se-ro-health" \
+  "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/a.ts")
+make_journal "$_TEST_TMPDIR"
+health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
+mkdir -p "$health_file"
+set +e
+result=$(run_session_end "se-ro-health")
+rc=$?
+set -e
+rmdir "$health_file" 2>/dev/null || true
+assert_eq "unwritable_health_exit_0" "0" "$rc"
+assert_contains "unwritable_health_valid_json" "$result" "{"
+assert_eq "unwritable_health_no_health_written_event" "0" "$(count_events health_written '' '' "$LOG")"
+
 # --- Test 9: topology="focused" for 2 unique r-edits (<3 => domain "mixed",
 # not idle — activity present, just not enough to attribute a segment) ---
 setup_test

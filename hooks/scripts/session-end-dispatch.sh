@@ -94,7 +94,8 @@ material_edits=$(count_events file_edit r)
 material_edits="${material_edits:-0}"
 
 # files_modified: ALL file_edit paths (r + x), flag stripped — feeds topology/
-# max_re_edits below AND the (unchanged) cross-session tracker further down.
+# max_re_edits below. (The cross-session tracker it also used to feed was
+# retired in wave 5 — hot files derive from the logs via eio_hot_files.)
 files_modified=$(list_events file_edit | sed 's/^[rx] //')
 
 # session_start / start_epoch — anchor for duration_min AND the git-derived
@@ -233,35 +234,40 @@ if [ "$(count_events health_written)" -gt 0 ]; then
   printf '{}'
   exit 0
 fi
-# Mark as written — appended before the health-file write itself (matches v3
-# ordering: a crash mid-write still leaves this session flagged, avoiding a
-# retry storm on the next SessionEnd fire).
-append_event "health_written" "$today"
 
 # --- Write to health file ---
-mkdir -p "$(dirname "$HEALTH_FILE")"
+mkdir -p "$(dirname "$HEALTH_FILE")" 2>/dev/null || true
 
 # Header strip (spec §6.1): idempotently remove any trend_*/avg_*/--- lines
 # left behind by a pre-v4 (or otherwise stale) header. Those fields are now
 # computed at READ time (hooks/scripts/lib/health-trend.sh) — never stored.
 # Runs every session-end regardless of whether the lines are actually present
 # ("tolerate their reappearance": harmless no-op when already clean).
+# Deny-tolerant end to end: a failed strip must not abort the hook.
 if [ -f "$HEALTH_FILE" ]; then
-  awk '!/^trend_/ && !/^avg_/ && !/^---$/' "$HEALTH_FILE" > "$HEALTH_FILE.tmp.$$" 2>/dev/null \
-    && mv "$HEALTH_FILE.tmp.$$" "$HEALTH_FILE"
+  { awk '!/^trend_/ && !/^avg_/ && !/^---$/' "$HEALTH_FILE" > "$HEALTH_FILE.tmp.$$" 2>/dev/null \
+    && mv "$HEALTH_FILE.tmp.$$" "$HEALTH_FILE"; } 2>/dev/null || true
 fi
 
 # Create file with header if it doesn't exist (v2: no trend_*/avg_*/---
-# metadata lines — those are read-time-only now).
+# metadata lines — those are read-time-only now). Deny-tolerant: creation
+# failure in a read-only sandbox must not abort before JSON is emitted.
 if [ ! -f "$HEALTH_FILE" ]; then
-  cat > "$HEALTH_FILE" << 'HEADER'
+  cat > "$HEALTH_FILE" 2>/dev/null << 'HEADER' || true
 # Cortex Health Log
 # Fields: v2|date|session_id|commits|material_edits|fix_ratio|reverts|rework_files|tests_pass|duration_min|max_re_edits|topology|domain|self_misses
 HEADER
 fi
 
-# Append v2 data row.
-echo "v2|${today}|${SESSION_ID}|${commits}|${material_edits}|${fix_ratio}|${reverts}|${rework_files}|${tests_pass}|${duration_min}|${max_re_edits}|${topology}|${domain}|${self_misses}" >> "$HEALTH_FILE" 2>/dev/null || true
+# Append v2 data row, then mark written ONLY on success (W5 review I-2):
+# recording health_written before/without the row would make every future
+# SessionEnd skip this session's row forever. Crash between row and marker is
+# covered by the per-sid health-file grep dedup above (retry-storm-safe).
+row_written=1
+echo "v2|${today}|${SESSION_ID}|${commits}|${material_edits}|${fix_ratio}|${reverts}|${rework_files}|${tests_pass}|${duration_min}|${max_re_edits}|${topology}|${domain}|${self_misses}" >> "$HEALTH_FILE" 2>/dev/null || row_written=0
+if [ "$row_written" -eq 1 ]; then
+  append_event "health_written" "$today"
+fi
 
 # v3's rolling-average recompute (trend_direction=/avg_*= header rewrite) is
 # GONE in v2 — trend is computed at READ time from v2 rows themselves
