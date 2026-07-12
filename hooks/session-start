@@ -60,9 +60,16 @@ fi
 # extractor applies the same guard for every append-only hook; session-start
 # mirrors it here because this hook extracts inline and creates the log.
 HOOK_SESSION_ID=$(_eio_sanitize_sid "$HOOK_SESSION_ID")
-# Fallback: epoch + PID if no session_id from Claude Code. The `-$$` suffix makes
-# concurrent boots in the same second collision-resistant (distinct log files).
-[ -z "$HOOK_SESSION_ID" ] && HOOK_SESSION_ID="$(date +%s)-$$"
+# NO fabricated identity (wave review I-5): a boot with a missing, malformed,
+# or rejected session_id creates NOTHING — no log, no provenance, no
+# carry-over appends, no injected sid. The old epoch-PID fallback minted
+# phantom sessions that polluted session counts and the experiment's
+# eligibility scans; "no sid ⇒ skip and say nothing" now holds at the log
+# CREATOR too, not just at appenders and skills.
+if [ -z "$HOOK_SESSION_ID" ]; then
+  printf '{}'
+  exit 0
+fi
 
 # (The native-hooks.ok marker is DELETED — calibration wave T5. It proved
 # native registration to dispatchers so they could suppress bootstrap-era
@@ -268,7 +275,9 @@ fi
 yesterday=$(date -d "yesterday" +%Y-%m-%d 2>/dev/null \
   || date -v-1d +%Y-%m-%d 2>/dev/null || echo "")
 missed_close=""
-if [[ -n "$yesterday" ]]; then
+# LAB-only (wave review protocol-fidelity): the session-end-ritual reminder
+# is adaptive workflow, not protection.
+if [ "$PROFILE" = "lab" ] && [[ -n "$yesterday" ]]; then
   yjournal="${PROJECT_DIR}/memory/${yesterday}.md"
   if [[ -f "$yjournal" ]]; then
     ycontent=$(cat "$yjournal" 2>/dev/null || echo "")
@@ -420,9 +429,12 @@ if [ -n "$old_carry_over" ]; then
   carry_over_msg=$'\n\n'"Carry-over from prior session:"$'\n'"${old_carry_over}"
 fi
 
-# --- Step 6b: Synthesis directive (judgment tasks for Claude) ---
+# --- Step 6b: Synthesis directive (judgment tasks for Claude) — LAB-only
+# (wave review C-2: gating on file existence alone injected the Lab
+# synthesis block into every CORE boot in any real environment, silently
+# contaminating the control condition) ---
 synthesis_directive=""
-if [ -f "$COLLAB_FILE" ]; then
+if [ "$PROFILE" = "lab" ] && [ -f "$COLLAB_FILE" ]; then
   synthesis_directive="## REQUIRED: Synthesis Tasks (complete before responding to user)
 ${synthesis_actions:+
 Hook automated:

@@ -37,6 +37,12 @@ tests_icon="❌"; [ "$(count_events test_run)" -gt 0 ] && tests_icon="✅"
 
 docs_icon="❌"; [ "$(count_events docs_edit)" -gt 0 ] && docs_icon="✅"
 
+# --- Lines 2-3: LAB-only, computation included (wave review protocol-
+# fidelity: §2 declares the adaptive computations off under core — computing
+# then hiding them was both wasted boot time and a matrix mismatch). ---
+STATUSLINE_CONDITION=$(eio_get_profile)
+if [ "$STATUSLINE_CONDITION" = "lab" ]; then
+
 # --- Line 2 data: organism health (v2: read-time trend from health-trend.sh,
 # spec §6.2 — no more trend_direction=/avg_reasoning_misses= header fields;
 # those are computed from v2 rows here, never stored). ---
@@ -116,6 +122,8 @@ if [ -n "$ir" ]; then
   ')
 fi
 
+fi # STATUSLINE_CONDITION = lab (lines 2-3 computation)
+
 # --- Output ---
 # Line 1 (session receipts — pure event-log data) renders in BOTH conditions.
 # Lines 2-3 (health pulse, lessons/mutations, interventions) are the adaptive
@@ -126,7 +134,7 @@ if [ "$SESSION_DATA_AVAILABLE" = true ]; then
 else
   printf '✏️  session data unavailable (no session id)\n'
 fi
-if [ "$(eio_get_profile)" = "lab" ]; then
+if [ "$STATUSLINE_CONDITION" = "lab" ]; then
   printf '%s %s │ 🧠 %s absorbed │ 🧬 %s mutations queued │ %s\n' "$heart" "$status" "$lessons" "$proposals" "$trend_segment"
   [ -n "$intervention_line" ] && printf '%s\n' "$intervention_line"
 fi

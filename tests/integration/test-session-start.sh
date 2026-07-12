@@ -78,28 +78,27 @@ else
 fi
 assert_eq "session_start_second_token_is_model" "unknown" "$ss_second"
 
-# --- Test 1b: a rejected traversal sid degrades to the epoch-PID fallback ---
-# session-start is the sole event-log creator, so unlike append-only callers it
-# must replace an unsafe sid instead of merely dropping the write. The fallback
-# must stay inside the current week bucket and the traversal target must never
-# appear outside sessions/.
+# --- Test 1b: a missing/malformed/rejected sid creates NOTHING (wave review
+# I-5: the old epoch-PID fallback minted phantom sessions — logs with
+# provenance and carry-over attributed to an identity nothing else knows.
+# "No sid ⇒ skip and say nothing" now holds at the log CREATOR too.) ---
 setup_opted_test
 traversal_sid="../../../../escaped"
-run_session_start "$(mock_json "session_id=$traversal_sid")" > /dev/null
-# The fallback sid is observable as the created log's FILENAME (the
-# current-session.id marker that used to expose it is deleted — T5).
-fallback_log=$(ls "$(_eio_week_dir)"/*.events.log 2>/dev/null | head -1 || true)
-fallback_sid=$(basename "${fallback_log:-none}" .events.log)
-fallback_shape="invalid"
-if printf '%s' "$fallback_sid" | grep -qE '^[0-9]+-[0-9]+$'; then
-  fallback_shape="epoch-pid"
-fi
-assert_eq "traversal_sid_uses_epoch_pid_fallback" "epoch-pid" "$fallback_shape"
-assert_file_exists "traversal_sid_log_created_inside_sessions" \
-  "$(_eio_week_dir)/${fallback_sid}.events.log"
+result=$(run_session_start "$(mock_json "session_id=$traversal_sid")")
+assert_eq "rejected_sid_returns_empty" "{}" "$result"
+# `find` on a dir the inert boot (correctly) never created exits 1 — pipefail-safe.
+log_count=$(find "$(_eio_sessions_dir)" -name '*.events.log' 2>/dev/null | wc -l | tr -d ' ' || true)
+assert_eq "rejected_sid_creates_no_log" "0" "${log_count:-0}"
 escaped_outside="absent"
 [ -f "$_TEST_TMPDIR/escaped.events.log" ] && escaped_outside="present"
 assert_eq "traversal_sid_creates_no_outside_log" "absent" "$escaped_outside"
+
+# And a payload with NO session_id at all: identical inertness.
+setup_opted_test
+result=$(run_session_start '{"no_sid":"here"}')
+assert_eq "sidless_boot_returns_empty" "{}" "$result"
+log_count=$(find "$(_eio_sessions_dir)" -name '*.events.log' 2>/dev/null | wc -l | tr -d ' ' || true)
+assert_eq "sidless_boot_creates_no_log" "0" "${log_count:-0}"
 
 # --- Test 2: mode_set / threshold_set / carry_over_age appended (defaults) ---
 setup_opted_test

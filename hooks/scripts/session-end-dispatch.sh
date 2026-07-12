@@ -159,6 +159,31 @@ if command -v git >/dev/null 2>&1 && git -C "$PROJECT_DIR" rev-parse --git-dir >
   has_git=true
 fi
 
+# Tail-commit capture (wave review I-6): a commit landing after the session's
+# FINAL Bash observation is counted in the health row (git window below) but
+# would be missing from the LOG — the calibration ledger's log-vs-git
+# cross-check would then flag a real commit as a sensor miss. Same
+# enumeration + sha-dedup as post-bash-dispatch; events only (no journal
+# line or prompt at session end).
+if [ "$has_git" = true ] && [ "$start_epoch" -gt 0 ] && [ -n "$EVENT_LOG" ] && [ -f "$EVENT_LOG" ]; then
+  known_shas=$(list_events commit | awk '{print $1}')
+  tail_commits=$(git -C "$PROJECT_DIR" log --since="$session_start" --format='%h %s' 2>/dev/null \
+    | head -50 | awk '{ a[NR] = $0 } END { for (i = NR; i >= 1; i--) print a[i] }') || true
+  if [ -n "$tail_commits" ]; then
+    while IFS= read -r tc; do
+      [ -z "$tc" ] && continue
+      tc_sha="${tc%% *}"
+      if [ -n "$known_shas" ] && printf '%s\n' "$known_shas" | grep -qxF "$tc_sha"; then
+        continue
+      fi
+      tc_subject="${tc#* }"
+      [ "$tc_subject" = "$tc" ] && tc_subject=""
+      append_event "commit" "${tc_sha} ${tc_subject}"
+      known_shas="${known_shas}${known_shas:+$'\n'}${tc_sha}"
+    done <<< "$tail_commits"
+  fi
+fi
+
 fix_or_revert_count=0
 reverts=0
 if [ "$has_git" = true ] && [ "$start_epoch" -gt 0 ]; then

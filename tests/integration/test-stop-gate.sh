@@ -63,6 +63,30 @@ result=$(run_stop_gate "uncommitted")
 assert_contains "block_on_uncommitted_changes" "$result" "block"
 assert_contains "block_on_uncommitted_changes_reason" "$result" "Uncommitted changes"
 
+# Test (wave review C-3): a RACY derived count of zero must not skip the
+# gate — ground truth decides. Log shape: commit A → edit → duplicate A
+# observation (async double-observe) puts the anchor's first-occurrence
+# math at 0 edits; the tree has a genuinely dirty TRACKED file; the session
+# has an r-edit. Old structure returned silently on the zero path.
+setup_test
+GITD="$_TEST_TMPDIR/git-racy"
+init_git_repo "$GITD"
+echo "base" > "$GITD/f.ts"
+git -C "$GITD" add -A
+git -C "$GITD" commit -q -m "feat: base"
+echo "dirty" >> "$GITD/f.ts"   # tracked, modified, uncommitted
+mkdir -p "$GITD/.claude/cortex/sessions/test-week"
+mark_opted_in "$GITD/.claude"
+RLOG="$GITD/.claude/cortex/sessions/test-week/racy.events.log"
+cat > "$RLOG" <<REOF
+1700000001|session_start|2026-03-14T00:00:00Z m
+1700000002|commit|aaa1111 feat: base
+1700000003|file_edit|r ${GITD}/f.ts
+1700000004|commit|aaa1111 feat: base
+REOF
+result=$(run_stop_gate_in "$GITD" "racy")
+assert_contains "racy_zero_count_still_blocks_on_dirty_tree" "$result" "Uncommitted changes"
+
 # Test: git-status self-heal clears a false positive — event log claims an
 # edit, but the real working tree is clean (already committed), so the
 # belt-and-suspenders git status cross-check resets edits to 0.

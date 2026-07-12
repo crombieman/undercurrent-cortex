@@ -70,11 +70,18 @@ case "$tool_name" in
     printf '%s' "$INPUT" | "$SCRIPT_DIR/post-bash-dispatch.sh"
     ;;
   Write|Edit)
-    printf '%s' "$INPUT" | "$SCRIPT_DIR/post-edit-dispatch.sh"
-    # For Write, also run pattern-template
-    if [ "$tool_name" = "Write" ]; then
-      printf '%s' "$INPUT" | "$SCRIPT_DIR/pattern-template.sh" 2>/dev/null || true
+    # Exactly ONE JSON object per hook invocation (wave review C-1: both
+    # sub-handlers printing straight to stdout produced concatenated `{}{}`
+    # on every Write — invalid under the hook contract). post-edit-dispatch
+    # speaks first; pattern-template (Write-only, lab-gated internally) is
+    # consulted only when post-edit had nothing to say.
+    edit_out=$(printf '%s' "$INPUT" | "$SCRIPT_DIR/post-edit-dispatch.sh")
+    if [ "$tool_name" = "Write" ] && { [ -z "$edit_out" ] || [ "$edit_out" = "{}" ]; }; then
+      pt_out=$(printf '%s' "$INPUT" | "$SCRIPT_DIR/pattern-template.sh" 2>/dev/null) || true
+      [ -n "$pt_out" ] && edit_out="$pt_out"
     fi
+    [ -z "$edit_out" ] && edit_out="{}"
+    printf '%s' "$edit_out"
     ;;
   *)
     printf '{}'

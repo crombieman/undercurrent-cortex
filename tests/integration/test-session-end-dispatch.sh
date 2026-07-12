@@ -420,6 +420,27 @@ health_file="$GITDIR/.claude/cortex/health.local.md"
 assert_eq "commits_field_is_git_window_count" "2" "$(v2_field "$health_file" 4)"
 assert_eq "fix_ratio_same_provenance" "0.50" "$(v2_field "$health_file" 6)"
 
+# --- Test 19c: TAIL-COMMIT capture (wave review I-6): a commit landing after
+# the session's final Bash observation must be appended to the LOG at
+# session end — otherwise the calibration ledger's log-vs-git cross-check
+# flags a real commit as a sensor miss. ---
+setup_test
+GITDIR="$_TEST_TMPDIR/git-tail"
+make_git_project "$GITDIR"
+mkdir -p "$GITDIR/memory"
+echo "# Journal" > "$GITDIR/memory/${TODAY}.md"
+now_epoch=$(date +%s)
+session_start_epoch=$((now_epoch - 300))
+session_start_iso=$(date -u -d "@${session_start_epoch}" +%Y-%m-%dT%H:%M:%SZ)
+commit_at "$GITDIR" "$((now_epoch - 60))" "feat: tail commit never observed" "t.ts"
+tail_sha=$(git -C "$GITDIR" rev-parse --short HEAD)
+TLOG=$(create_event_log "$GITDIR/.claude" "se-tail" \
+  "$((now_epoch + 1))|session_start|${session_start_iso} test-model" \
+  "$((now_epoch + 2))|file_edit|r ${GITDIR}/t.ts")
+run_session_end "se-tail" "$GITDIR" > /dev/null
+assert_contains "tail_commit_appended_to_log" "$(list_events commit "$TLOG")" "$tail_sha"
+assert_eq "tail_commit_count_one" "1" "$(count_events commit '' '' "$TLOG")"
+
 # --- Test 20: rework_files — intersection of files committed THIS session
 # with files touched by a commit in the 14 days before session_start ---
 setup_test

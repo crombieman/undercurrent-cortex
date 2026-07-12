@@ -48,8 +48,7 @@ Restart Claude Code. All 7 hook events register natively from the plugin's `hook
 
 Cortex is **fully inert until you opt a project in**: in a project without the sentinel file `.claude/cortex/enabled`, every hook exits immediately with `{}` — zero files created, zero state written.
 
-- **Opt in:** run `/cortex:setup` once in the project. It creates the sentinel and validates the workspace. A new session is required for activation.
-- **Grandfathering:** a project with real prior Cortex use (an existing `health.local.md` with data rows) gets the sentinel auto-created on first boot.
+- **Opt in:** run `/cortex:setup` once in the project. It creates the sentinel and validates the workspace. A new session is required for activation. This is the ONLY activation path (the old grandfathering auto-activation was deleted in the calibration wave — a pre-4.0 project stays inert until you run setup).
 - **Opt out:** delete `.claude/cortex/enabled` (or the whole `.claude/cortex/` directory).
 
 ### Hook Architecture

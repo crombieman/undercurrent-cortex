@@ -40,10 +40,11 @@ case "$tool_name" in
   *) printf '{}'; exit 0 ;;
 esac
 
-# --- Bash: git push safety check ---
+# --- Bash: git push safety check — LAB-only (wave review I-7: this advisory
+# systemMessage escaped the T6 emitter census; advisory = treatment) ---
 if [ "$tool_name" = "Bash" ]; then
   command_str=$(printf '%s' "$INPUT" | extract_json_field "tool_input.command")
-  if echo "$command_str" | grep -qE 'git\s+push'; then
+  if echo "$command_str" | grep -qE 'git\s+push' && [ "$(eio_get_profile)" = "lab" ]; then
     source "$SCRIPT_DIR/lib/escape-json.sh" || true
     msg=$(escape_for_json "Git push safety: (1) no untracked files imported by committed code, (2) tests pass, (3) docs updated if architectural files changed, (4) never force-push to master.")
     printf '{"systemMessage":"%s"}' "$msg"

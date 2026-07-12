@@ -279,6 +279,26 @@ eio_proposals_file() {
 # Resolution: CORTEX_PROFILE env → $(_eio_cortex_dir)/profile.local first
 # line → "lab" (the lived default).
 eio_get_profile() {
+  # Session-bound condition (wave review I-4): once THIS session's log
+  # carries a provenance stamp, ITS condition wins over the mutable
+  # profile.local / env — flipping the profile with a session still open
+  # must not produce mixed core/lab behavior labeled as one condition.
+  # (session-start resolves the condition BEFORE stamping — the just-created
+  # log has no provenance yet, so boot falls through to env/file below and
+  # then freezes the answer into the stamp.)
+  if [ -n "${EVENT_LOG:-}" ] && [ -f "${EVENT_LOG:-}" ]; then
+    local _prov _prov_cond=""
+    _prov=$(last_event provenance)
+    if [ -n "$_prov" ]; then
+      _prov_cond=$(printf '%s' "$_prov" | awk '{
+        for (i = 1; i <= NF; i++)
+          if ($i ~ /^condition=/) { sub(/^condition=/, "", $i); print $i; exit }
+      }') || true
+      case "$_prov_cond" in
+        core|lab) echo "$_prov_cond"; return 0 ;;
+      esac
+    fi
+  fi
   local profile="${CORTEX_PROFILE:-}"
   if [ -z "$profile" ] && [ -f "$(_eio_cortex_dir)/profile.local" ]; then
     profile=$(head -1 "$(_eio_cortex_dir)/profile.local" 2>/dev/null | tr -d '[:space:]')

@@ -159,5 +159,16 @@ after=$(count_events tool_call '' '' "$LOG")
 assert_eq "journal_boundary_tool_call_count_25" "25" "$after"
 assert_eq "journal_boundary_no_intervention" "0" "$(count_events intervention '' '' "$LOG")"
 
+# --- Wave review C-1: a Write must emit exactly ONE JSON object — the old
+# routing let post-edit-dispatch AND pattern-template both print, producing
+# concatenated `{}{}` (invalid) on every ordinary Write. ---
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "pd-onejson")
+json=$(mock_json "tool_name=Write" "session_id=pd-onejson" \
+  "tool_input.file_path=${_TEST_TMPDIR}/notes/plain.txt" \
+  "tool_input.content=hello")
+result=$(run_post_dispatch "$json")
+assert_eq "write_emits_exactly_one_json" "{}" "$result"
+
 export PATH="$SAVED_PATH"
 end_suite

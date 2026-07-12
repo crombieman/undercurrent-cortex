@@ -580,4 +580,25 @@ assert_eq "esc_interleaved_dup_anchor_at_latest_distinct" "0" \
 assert_eq "esc_missing_file_zero" "0" \
   "$(eio_edits_since_last_commit "$ESC/w/does-not-exist.log")"
 
+# --- Session-bound condition (wave review I-4): a log's provenance stamp
+# WINS over the mutable profile.local/env — flipping the profile mid-session
+# must not flip the running session's condition. ---
+PBC=$(mktemp -d)
+mkdir -p "$PBC/w"
+cat > "$PBC/w/bound.log" <<'PBEOF'
+1700000001|session_start|2026-07-10T00:00:00Z m
+1700000002|provenance|condition=core plugin=4.2.0 repo=x host=t
+PBEOF
+EVENT_LOG="$PBC/w/bound.log"
+CORTEX_PROFILE="lab"
+assert_eq "provenance_condition_beats_env" "core" "$(eio_get_profile)"
+# No provenance in the log → env/file resolution still applies.
+cat > "$PBC/w/unbound.log" <<'PBEOF'
+1700000001|session_start|2026-07-10T00:00:00Z m
+PBEOF
+EVENT_LOG="$PBC/w/unbound.log"
+assert_eq "no_provenance_falls_to_env" "lab" "$(eio_get_profile)"
+unset CORTEX_PROFILE
+EVENT_LOG=""
+
 end_suite

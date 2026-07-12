@@ -77,15 +77,18 @@ add_reminder() {
   reminders="${reminders}- ${2}\n"
 }
 
-# Gate 1: Uncommitted changes. Race-safe derivation (Codex plan-review C-2):
-# async PostToolUse handlers can double-observe a sha; the first-observation
-# anchor ignores duplicate commit events instead of letting one falsely
-# reset the count past newer edits.
+# Gate 1: Uncommitted changes. GROUND TRUTH decides dirty; derived counts
+# only ATTRIBUTE work to this session (wave review C-3: a racy duplicate
+# commit observation can zero the derived edits-since-commit count, and the
+# old structure never consulted git on the zero path — so the block was
+# skippable by write-ordering alone). Structure now: any r-flagged edit this
+# session ⇒ ask `git status` whether tracked changes exist; the derived
+# count is display detail. Non-git projects keep the derived-count behavior.
 edits=$(eio_edits_since_last_commit)
 edits="${edits:-0}"
-if [ "$edits" -gt 0 ]; then
-  # Belt-and-suspenders: verify with git status (catches gitignored,
-  # already-committed, or otherwise stale-looking counts).
+r_total=$(count_events file_edit r)
+r_total="${r_total:-0}"
+if [ "$r_total" -gt 0 ] || [ "$edits" -gt 0 ]; then
   if git -C "${PROJECT_DIR}" rev-parse --git-dir >/dev/null 2>&1; then
     # grep -v exits 1 when nothing is filtered out (i.e. repo is clean) — under
     # pipefail that would kill the pipeline before wc/tr run; `|| true` on the
@@ -95,6 +98,8 @@ if [ "$edits" -gt 0 ]; then
     actual_changes="${actual_changes:-0}"
     if [ "$actual_changes" -eq 0 ]; then
       edits=0
+    elif [ "$edits" -eq 0 ]; then
+      edits="$actual_changes"
     fi
   fi
 

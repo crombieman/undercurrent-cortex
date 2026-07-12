@@ -233,4 +233,18 @@ result=$(echo 'not valid json {{{' | bash "$SANDBOX/hooks/scripts/pre-dispatch.s
 assert_eq "malformed_json_exit_zero" "0" "$rc"
 assert_eq "malformed_json_returns_empty" "{}" "$result"
 
+# Test 18: the git-push advisory is LAB-only (wave review I-7: it escaped the
+# T6 emitter census — advisory systemMessages are treatment).
+setup_test
+create_event_log "$_TEST_TMPDIR/.claude" "pd-push" > /dev/null
+json=$(mock_json "tool_name=Bash" "session_id=pd-push" \
+  "tool_input.command=git push origin master")
+export CORTEX_PROFILE=lab
+result=$(run_pre_dispatch "$json")
+assert_contains "push_advisory_fires_under_lab" "$result" "Git push safety"
+export CORTEX_PROFILE=core
+result=$(run_pre_dispatch "$json")
+unset CORTEX_PROFILE
+assert_eq "push_advisory_silent_under_core" "{}" "$result"
+
 end_suite

@@ -34,6 +34,13 @@ run_hook() {
 setup_test
 mark_opted_in "$_TEST_TMPDIR/.claude"
 set_condition core
+# A REAL collaboration file must exist for this test to mean anything (wave
+# review C-2: the directive was gated on file existence only, so the core
+# boot injected the Lab synthesis block whenever the file existed — i.e. in
+# every real environment; the original test passed only because its HOME had
+# no collaboration.md).
+mkdir -p "$_TEST_TMPDIR/.cortex/synthesis"
+printf '# Collaboration Patterns\n' > "$_TEST_TMPDIR/.cortex/synthesis/collaboration.md"
 result=$(echo "$(mock_json "session_id=cond-core")" \
   | CORTEX_PROJECT_DIR="$_TEST_TMPDIR" HOME="$_TEST_TMPDIR" \
     bash "$PLUGIN_ROOT/hooks/session-start" 2>/dev/null) || true
