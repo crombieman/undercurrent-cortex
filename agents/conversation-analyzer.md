@@ -79,11 +79,11 @@ For each detected correction, extract:
    - **NO** → flag as new pattern class
 
 2. Read `.claude/cortex/health.local.md` — check for cross-session trends:
-   - Same domain appearing in reasoning_misses across 3+ sessions
-   - Consistently high edits/commit ratio in the same domain
-   - Note: rows with `topology=idle` (field 11) are valid sessions but had zero tracked activity. Include them in session counts, exclude from metric averages.
+   - Same domain (v2 field 13) recurring with high `self_misses` (field 14) across 3+ sessions
+   - Consistently high rework/fix-ratio in the same domain
+   - Note: since the calibration wave, genuinely idle sessions write NO row at all — every v2 row represents real activity. Legacy idle rows on old files are excluded from metric math by every reader.
 
-3. Count total sessions this week by counting `.local.md` files in `cortex/sessions/YYYY-WNN/` (e.g., `ls .claude/cortex/sessions/2026-W12/*.local.md | wc -l`). Health rows undercount sessions because the SessionEnd hook fires unreliably (~40%). Session file count is the authoritative session count.
+3. Count total sessions this week by counting event logs in `cortex/sessions/YYYY-WNN/` (e.g., `ls .claude/cortex/sessions/2026-W12/*.events.log | wc -l`). The event log is created at boot by session-start, so the log count is the authoritative session count; health rows legitimately undercount it (idle sessions skip their row by design). Legacy `*.local.md` files are pre-v4 artifacts — inert, don't count them.
 
 4. Output a classification table: correction → existing/new → domain → cross-session trend (yes/no)
 

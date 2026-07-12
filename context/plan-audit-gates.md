@@ -245,7 +245,8 @@
      [1-2 sentence rationale: why this over the alternatives]
      ```
   2. Include a Bash tool call to actually write the entry
-  3. Run: `SID=$(cat .claude/cortex/current-session.id 2>/dev/null) && write_field "decisions_logged" "true" "$STATE_FILE"` to mark capture complete
+  3. Mark capture complete by appending a `decision_logged` event — use the `Session id: <sid>` line from your boot context (never a file, never a guess; this clears stop-gate Gate 7's reminder):
+     `SID="<SID-FROM-CONTEXT>" && EIO=$(ls -t ~/.claude/plugins/cache/undercurrent-studio/cortex/*/hooks/scripts/lib/event-io.sh 2>/dev/null | head -1) && [ -n "$EIO" ] && source "$EIO" && resolve_event_log "{\"session_id\":\"${SID}\"}" && append_event decision_logged "true"`
 - "No decisions in this plan" is valid ONLY for purely mechanical tasks.
 
 ---

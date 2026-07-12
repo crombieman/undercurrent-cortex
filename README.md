@@ -8,13 +8,13 @@ A Claude Code plugin that works like a **living organism** — 13 biological sys
 
 Imagine a second brain sitting alongside Claude that:
 
-- **Remembers** every file you edit, every commit you make, every tool call — in an append-only per-session event log
+- **Records** the session's tool calls, tool-driven file edits, and the repo's commits (enumerated from git itself — command text plays no part) in an append-only per-session event log
 - **Blocks** dangerous operations before they happen (like using `now()` in a Postgres migration)
-- **Injects context** when you mention a topic — keyword-matched context files flow to where they're needed
-- **Nudges** you to commit when edits pile up, and validates commit message format
+- **Injects context** when you mention a topic — keyword-matched context files flow to where they're needed (lab condition)
+- **Nudges** you to commit when edits pile up, and validates commit message format (lab condition)
 - **Guards** session end so you don't walk away with uncommitted or untested work
-- **Watches** the outside world — did CI fail? Did someone push to remote? Any open PRs?
-- **Heals** its own historical documents on boot (health history pruning, stale temp cleanup)
+- **Watches** the outside world — did CI fail? Did someone push to remote? Any open PRs? (lab condition)
+- **Keeps house** on boot — stale temp cleanup, old backups, ancient week-bucket pruning (the self-"healing" subsystem is gone: it only ever repaired damage it caused)
 - **Adapts** its behavior based on git-derived health metrics from your recent sessions
 - **Grades its own nudges** — every intervention is scored for follow-through, and chronic ignored nudges get flagged for retirement
 - **Proposes** its own improvements and waits for your approval
@@ -54,19 +54,18 @@ Cortex is **fully inert until you opt a project in**: in a project without the s
 
 ### Hook Architecture
 
-All 7 events live in the plugin's `hooks.json` and dispatch natively. The old two-tier settings.json bootstrap (a workaround for a since-fixed [platform bug](https://github.com/anthropics/claude-code/issues/34573)) is retired: `bootstrap-hooks.sh` now only *removes* leftover entries from old installs, and is itself scheduled for deletion in v4.2. Any stale settings.json entry from an old version is structurally inert — dispatchers detect the native registration via a per-session marker and no-op.
+All 7 events live in the plugin's `hooks.json` and dispatch natively. The bootstrap era is fully deleted (calibration wave): the settings.json injection workaround for a since-fixed [platform bug](https://github.com/anthropics/claude-code/issues/34573), its cleanup script, and the per-session suppression marker are all gone — deletion happened only after verifying, at deletion time, that no settings file anywhere still carried a bootstrap-era hook entry.
 
-### Profiles
+### Conditions
 
-Profiles control how assertive the organism is (all hooks fire regardless; the profile gates behavior inside them):
+Cortex runs in one of two experimental conditions (all hooks fire regardless; the condition gates behavior inside them — this backs the Core/Lab experiment the calibration wave was built for):
 
-| Profile | Behavior |
-|---------|----------|
-| `standard` (default) | Full organism: all gates, sensory scan, feedback loop, social patterns. TDD guard is a once-per-session reminder |
-| `minimal` | Enforcement + state tracking only: no sensory/social/feedback analysis, no root-cause reminder |
-| `strict` | Everything in standard, plus pending proposals surfaced at boot and the TDD guard actually **denies** unprotected src edits |
+| Condition | Behavior |
+|-----------|----------|
+| `lab` (default) | Core plus the frozen adaptive tier: synthesis tasks, health pulse and trend, interventions (commit nudge, re-edit warning, journal checkpoint, codex reminder), keyword context injection, sensory scan, social patterns |
+| `core` | The control: event recording, carry-over, and blocking protection gates ONLY. Zero adaptive output — a core session emits no nudges, warnings, injections, or health display (test-enforced) |
 
-Set via `CORTEX_PROFILE` env var or `.claude/cortex/profile.local` file in your project.
+Legacy profile names alias: `minimal`→core, `standard`/`strict`→lab (strict's TDD deny is retired). Set via `CORTEX_PROFILE` env var or `.claude/cortex/profile.local` file in your project.
 
 ---
 
@@ -180,26 +179,23 @@ Mid-session checks have a 5-minute cooldown.
 
 *Where:* `sensory-check.sh` (called by `session-start` and `context-flow.sh`)
 
-**10. Healing/Repair System — Self-Recovery**
-On every boot, the organism maintains its own *historical documents* (never the active event logs — those are append-only and untouchable):
+**10. Housekeeping (the healer is dead)**
+The "Healing/Repair System" was DELETED in the calibration wave — its verdict after live forensics: it never repaired damage it (or its sibling writer) didn't cause, and its rebuild path ate data. `health.local.md` is create-once + append-only now, lint-enforced; the only writers left are header creation and row append. What survives is the hygiene with a clean record, silent, on every boot:
 
-| Check | What it fixes |
+| Check | What it does |
 |-------|--------------|
-| Corrupted health header | Rebuilds it |
-| Oversized health history | Prunes >500 lines to the last 200 data rows |
-| Missing file separators | Adds `---` to proposals/decisions files |
 | Stale temp files | Deletes `*.tmp.*` files older than 60 minutes |
 | Old state backups | Removes backups older than 7 days |
 | Ancient week buckets | Removes `sessions/YYYY-WNN/` dirs older than 90 days (never the current week) |
 
-*Where:* `lib/validate-organism.sh` (sourced by `session-start`)
+*Where:* `lib/housekeeping.sh` (sourced by `session-start`)
 
 **11. Growth/Adaptation System — Proposal Lifecycle**
 The Reproductive system (System 8) creates proposals. The Growth system manages their lifecycle:
 
-- **Surfacing:** On each session start, pending proposals are shown with increasing urgency
-- **Approve:** Say "approve proposal" — safe types auto-apply (lessons, context keywords, skill updates). Risky types (hook rules) get flagged for manual review
-- **Reject:** Say "reject proposal" — status set to rejected, won't surface again
+- **Review:** via `/analyze-session` — boot surfacing retired in the calibration wave (proposal review is a maintainer act, not treatment; the pending queue rides until the experiment's verdict)
+- **Approve:** Say "approve proposal" during a review — safe types auto-apply (lessons, context keywords, skill updates). Risky types (hook rules) get flagged for manual review
+- **Reject:** Say "reject proposal" — status set to rejected
 - **Duplicate detection:** Won't apply content that already exists in the target file
 
 6 proposal types:
@@ -254,12 +250,14 @@ The honest ledger. "Blocks" means a hard deny or a blocked Stop; everything else
 | Stop Gates 4/5 — carry-over / stale carry-over | **Blocks** | Escape hatch after 2 consecutive blocks |
 | Migration linter — `now()` etc. in migrations | **Blocks** | PreToolUse deny |
 | Plan-file guard — overwriting an existing plan | **Blocks once** | Same-path retry allowed (deliberate rewrite) |
-| TDD guard (strict profile only) | **Blocks** | standard/minimal get a once-per-session reminder |
-| Stop Gates 2/6/7 — docs / root-cause / decisions | Reminds | Never emit a block |
-| Codex-review gate | Reminds | Promotion to blocking runs through follow-through data, not fiat |
-| Commit nudge, re-edit warning, journal checkpoint | Reminds | Each fire is scored for follow-through |
-| Cautious mode | Reminds | One injection per session |
-| Health trend, domain tags, hot files, intervention rates | Derives | Read-time computation from logs; drives nothing directly |
+| TDD guard | Reminds (lab only) | Once per session; the old strict-profile deny is retired |
+| Stop Gates 2/6/7 — docs / root-cause / decisions | Reminds (lab only) | Never emit a block |
+| Codex-review gate | Reminds (lab only) | Promotion to blocking runs through follow-through data, not fiat |
+| Commit nudge, re-edit warning, journal checkpoint | Reminds (lab only) | Each fire is scored for follow-through |
+| Cautious mode | Reminds (lab only) | One injection per session |
+| Health trend, domain tags, hot files, intervention rates | Derives (lab display) | Read-time computation from logs; drives nothing directly |
+
+Everything in the "Blocks" class runs in BOTH conditions (protection is not treatment); every "Reminds" row is lab-only — a core session is provably silent (see `tests/integration/test-conditions.sh`).
 
 ## Statusline
 
@@ -383,9 +381,9 @@ All state lives in `.claude/cortex/` (gitignored):
 | `cortex/decisions.local.md` | Decision journal entries with metadata (category, reversibility, confidence) |
 | `cortex/config.local` | Optional per-project vocabulary: `architectural_patterns`, `docs_file`, `lessons_file`, `test_command`, `commit_nudge_threshold` |
 | `cortex/enabled` | The opt-in sentinel (created by `/cortex:setup`) — without it every hook is inert |
-| `cortex/native-hooks.ok` | Per-session marker proving native registration (suppresses stale settings.json entries) |
-| `cortex/current-session.id` | Active session id, for read-only surfaces (`/status`) |
-| `cortex/profile.local` | Hook profile override (minimal/standard/strict) |
+| `cortex/profile.local` | Condition override (`core`/`lab`; legacy `minimal`/`standard`/`strict` alias) |
+
+No shared mutable identity files remain: `native-hooks.ok` and `current-session.id` were deleted in the calibration wave (a guest boot clobbered both in one week — the session id now travels explicitly through the boot context injection, pre-compact re-injection, and skill/command arguments; leftover files from older versions are ignored).
 
 ### 12 Context Files
 
@@ -449,9 +447,9 @@ To create a domain pack:
 tests/
   run-all.sh                              # Test runner
   unit/                                   # 9 — event-io, state-io, json-extract, escape-json, validate-organism, lint scans, fixtures, mocks, hooks.json contract
-  integration/                            # 26 — one per hook script + opt-in gate, native marker, dual-fire, old-cache overlap, hook contract, profiles
-  edge/                                   # 1 — Windows paths
-  regression/                             # 5 — health dedup, pipefail glob, concurrent appends, session-start perf budget, timeout contract
+  integration/                            # one per hook script + opt-in gate, singleton-free, conditions, old-cache overlap, hook contract, profiles
+  edge/                                   # Windows paths
+  regression/                             # health dedup, pipefail glob, concurrent appends, session-start perf budget, timeout contract
   lib/                                    # 3 shared helpers — fixtures, mocks, test framework
 ```
 
@@ -468,16 +466,15 @@ cortex/
     marketplace.json                       # Marketplace listing metadata
   hooks/
     hooks.json                             # ALL 7 events, native registration
-    session-start                          # SessionStart: event-log creation + healing + carry-over + sensory + feedback
+    session-start                          # SessionStart: event-log creation + housekeeping + carry-over + condition-gated adaptive tier
     scripts/
-      bootstrap-hooks.sh                   # Cleanup-only (removes old settings.json entries) — deleted in v4.2
       pre-dispatch.sh                      # PreToolUse dispatcher
       post-dispatch.sh                     # PostToolUse dispatcher (tool counter + routing)
       post-edit-dispatch.sh                # Edit tracking + commit nudge + re-edit warning
       post-bash-dispatch.sh                # Commit/test/codex detection + commit format validation
       migration-linter.sh                  # Block now() in migrations
       plan-file-guard.sh                   # Block plan overwrites (once per path)
-      tdd-guard.sh                         # TDD reminder (deny on strict profile only)
+      tdd-guard.sh                         # TDD reminder (lab condition only; the strict deny is retired)
       context-flow.sh                      # Keyword context + decisions + cautious mode
       drift-detector.sh                    # Async codebase spot-checks
       pattern-template.sh                  # Convention exemplar injection
@@ -490,10 +487,9 @@ cortex/
       lib/
         escape-json.sh                     # JSON string escaping (control-char safe)
         json-extract.sh                    # Lightweight JSON field extraction
-        event-io.sh                        # THE state layer: append_event + read-time derivations
+        event-io.sh                        # THE state layer: append_event + read-time derivations + condition resolution
         health-trend.sh                    # Read-time trend medians from v2 health rows
-        state-io.sh                        # LEGACY read-only surface — shrinks further in v4.2
-        validate-organism.sh               # Healing: historical-document maintenance
+        housekeeping.sh                    # Boot hygiene: temp/backup cleanup + week-dir pruning (the healer is deleted)
   skills/             # 16 skill directories
   commands/           # 10 slash commands
   agents/             # conversation-analyzer + deep-dive + code-reviewer + memory-synthesis

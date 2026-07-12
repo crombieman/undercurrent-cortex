@@ -71,6 +71,26 @@ mapfile -t hook_files_all < <(find "$PLUGIN_ROOT/hooks" -type f \( -name '*.sh' 
 hits=$(scan_for_deleted_state_io_calls "${hook_files_all[@]}")
 assert_eq "no_deleted_state_io_calls_in_hooks" "" "$hits"
 
+# The INSTRUCTION trees (skills/agents/commands/context) must not teach dead
+# APIs or deleted singleton files either (calibration T7 — the plan-audit
+# Gate 17 snippet instructed `write_field` + current-session.id for months
+# after both died). README/docs are exempt: history entries legitimately
+# NAME dead APIs when describing their deletion.
+scan_for_dead_instructions() {
+  awk '
+    { sub(/\r$/, "") }
+    /(^|[^A-Za-z0-9_])(write_field|increment_field|append_to_section|resolve_state_file|init_state_file|validate_state_file|migrate_state_files|read_field|read_section|cleanup_stale_state_files|validate_organism)([^A-Za-z0-9_]|$)/ {
+      printf "%s:%d:%s\n", FILENAME, FNR, $0; next
+    }
+    /current-session\.id|native-hooks\.ok/ {
+      printf "%s:%d:%s\n", FILENAME, FNR, $0
+    }
+  ' "$@" 2>/dev/null
+}
+mapfile -t instruction_files < <(find "$PLUGIN_ROOT/skills" "$PLUGIN_ROOT/agents" "$PLUGIN_ROOT/commands" "$PLUGIN_ROOT/context" -type f -name '*.md' 2>/dev/null)
+hits=$(scan_for_dead_instructions "${instruction_files[@]}")
+assert_eq "no_dead_instructions_in_skill_trees" "" "$hits"
+
 # --- scanner catches a planted violation (fixture) ---
 FIX2=$(mktemp -d)
 printf 'write_field "commits_count" "1" "$STATE_FILE"\n' > "$FIX2/violation.sh"
