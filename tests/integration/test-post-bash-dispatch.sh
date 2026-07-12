@@ -11,8 +11,22 @@ source "$PLUGIN_ROOT/hooks/scripts/lib/event-io.sh"
 
 begin_suite "post-bash-dispatch"
 
-# Real git repo in the sandbox — commit-recency guard reads actual git log
-# timestamps, so a mocked git (fixed canned output) can't exercise it.
+# Real git repo in the sandbox — the git-derived commit sensor enumerates
+# `git log --since=<session anchor>`, so a mocked git (fixed canned output)
+# can't exercise it.
+#
+# Suite-local setup_test override: every test starts with a COMMIT-FREE repo.
+# The sensor enumerates the whole session window on ANY Bash observation, so
+# commits left behind by an earlier test would leak into every later test's
+# fresh event log (fixture anchor 2026-03-14 predates all test commits).
+eval "orig_$(declare -f setup_test)"
+setup_test() {
+  orig_setup_test
+  rm -rf "$_TEST_TMPDIR/.git"
+  git -C "$_TEST_TMPDIR" init -q
+  git -C "$_TEST_TMPDIR" config user.email "test@cortex.local"
+  git -C "$_TEST_TMPDIR" config user.name "Cortex Test"
+}
 git -C "$_TEST_TMPDIR" init -q
 git -C "$_TEST_TMPDIR" config user.email "test@cortex.local"
 git -C "$_TEST_TMPDIR" config user.name "Cortex Test"
@@ -68,25 +82,23 @@ LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "npm-install")
 result=$(run_post_bash "npm-install" "npm install lodash")
 assert_eq "non_git_non_test_command_returns_empty" "{}" "$result"
 
-# Test 5: git commit appends a commit event whose value carries sha + subject
+# Test 5: a new commit is captured by enumeration — COMMAND TEXT PLAYS NO
+# ROLE (calibration wave, queue item 1): any exit-0 Bash observation after the
+# commit picks it up from `git log --since=<anchor>`.
 setup_test
 LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "commit-fresh" \
   "1700000001|commit|abc1234 feat: prior commit")
 make_commit "feat: add fresh commit"
 sha=$(git -C "$_TEST_TMPDIR" rev-parse --short HEAD)
-run_post_bash "commit-fresh" "git commit -m feat-test" > /dev/null
+run_post_bash "commit-fresh" "echo done" > /dev/null
 result=$(list_events commit "$LOG")
 count=$(count_events commit '' '' "$LOG")
 assert_eq "commit_event_count_increments" "2" "$count"
 assert_contains "commit_event_has_short_sha" "$result" "$sha"
 assert_contains "commit_event_has_subject" "$result" "feat: add fresh commit"
 
-# Test 5b: compound `git add ... && git commit` ALSO appends the commit event.
-# The line-anchored form silently dropped every compound-command commit — the
-# session's edits-since-commit never reset, and (worse, post-T5) every
-# commit_nudge in such a session scored as not-followed, poisoning the
-# follow-through stats. The HEAD-recency guard, not the anchor, is what keeps
-# non-committing invocations out.
+# Test 5b: compound `git add ... && git commit` — trivially captured now (the
+# lexical era needed a word-boundary regex for this; enumeration doesn't care).
 setup_test
 LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "commit-compound" \
   "1700000001|commit|abc1234 feat: prior commit")
@@ -97,24 +109,43 @@ count=$(count_events commit '' '' "$LOG")
 assert_eq "compound_commit_event_appended" "2" "$count"
 assert_contains "compound_commit_event_sha" "$(list_events commit "$LOG")" "$sha"
 
-# Test 5c: a QUOTED "git commit" inside another command (grep, echo "...") does
-# not fire — the boundary class excludes quote characters
+# Test 5c: command text mentioning "git commit" with NO actual new commit
+# appends nothing — there is no lexical path left to forge through.
 setup_test
 LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "commit-prose" \
   "1700000001|commit|abc1234 feat: prior commit")
-make_commit "feat: fresh head but not a commit command"
 run_post_bash "commit-prose" "grep -rn 'git commit' docs/" > /dev/null
-assert_eq "quoted_git_commit_does_not_fire" "1" "$(count_events commit '' '' "$LOG")"
+assert_eq "commit_mention_without_commit_appends_nothing" "1" \
+  "$(count_events commit '' '' "$LOG")"
 
-# Test 6: git commit --amend does not append a commit event (existing count unchanged)
+# Test 5d: multiple commits between observations all land, in CHRONOLOGICAL
+# order (git enumerates newest-first; the sensor reverses before appending —
+# line order is the authoritative event order).
 setup_test
-LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "commit-amend" \
-  "1700000001|commit|abc1234 feat: prior commit")
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "commit-multi")
+make_commit "feat: first of batch"
+sha1=$(git -C "$_TEST_TMPDIR" rev-parse --short HEAD)
+make_commit "feat: second of batch"
+sha2=$(git -C "$_TEST_TMPDIR" rev-parse --short HEAD)
+run_post_bash "commit-multi" "echo observed" > /dev/null
+assert_eq "multi_commit_both_captured" "2" "$(count_events commit '' '' "$LOG")"
+ordered=$(list_events commit "$LOG" | awk '{print $1}' | tr '\n' ' ')
+assert_eq "multi_commit_chronological_order" "${sha1} ${sha2} " "$ordered"
+
+# Test 6: git commit --amend REWRITES the sha — the amended commit is a new
+# observation (accepted residual: the orphaned pre-amend sha's event remains;
+# the health row's commit count is git-derived, so the ROW stays correct).
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "commit-amend")
 make_commit "feat: pre-amend base"
-result=$(run_post_bash "commit-amend" "git commit --amend")
-after=$(count_events commit '' '' "$LOG")
-assert_eq "amend_does_not_append_commit_event" "1" "$after"
-assert_eq "amend_returns_empty_response" "{}" "$result"
+run_post_bash "commit-amend" "echo observe base" > /dev/null
+assert_eq "amend_base_observed" "1" "$(count_events commit '' '' "$LOG")"
+git -C "$_TEST_TMPDIR" commit -q --amend --allow-empty -m "feat: amended subject"
+amended_sha=$(git -C "$_TEST_TMPDIR" rev-parse --short HEAD)
+run_post_bash "commit-amend" "echo observe amend" > /dev/null
+assert_eq "amended_sha_captured_as_new_observation" "2" \
+  "$(count_events commit '' '' "$LOG")"
+assert_contains "amended_sha_present" "$(list_events commit "$LOG")" "$amended_sha"
 
 # Test 7: conventional commit message — no warning, but journal context nudge
 setup_test
@@ -139,27 +170,44 @@ run_post_bash "commit-journal" "git commit -m test" > /dev/null
 journal="$_TEST_TMPDIR/memory/$(date +%Y-%m-%d).md"
 assert_file_contains "journal_logs_commit_message" "$journal" "commit: fix: journal logging test"
 
-# Test 10: stale HEAD (commit older than 60s) skips the commit event, but the
-# journal write + systemMessage flow still runs (mapping-table resolution)
+# Test 10: a commit whose committer date PRECEDES the session_start anchor is
+# outside the session window — not this session's work, never enumerated.
 setup_test
-LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "commit-stale" \
-  "1700000001|commit|abc1234 feat: prior commit")
-make_commit "chore: stale commit" -1000
-result=$(run_post_bash "commit-stale" "git commit -m test")
-after=$(count_events commit '' '' "$LOG")
-assert_eq "stale_commit_skips_event" "1" "$after"
-assert_contains "stale_commit_still_prompts" "$result" "Commit logged"
-journal="$_TEST_TMPDIR/memory/$(date +%Y-%m-%d).md"
-assert_file_contains "stale_commit_journal_still_written" "$journal" "stale commit"
+mkdir -p "$_TEST_TMPDIR/.claude/cortex/sessions/test-week"
+mark_opted_in "$_TEST_TMPDIR/.claude"
+LOG="$_TEST_TMPDIR/.claude/cortex/sessions/test-week/commit-stale.events.log"
+make_commit "chore: pre-session commit" -1000
+printf '%s|session_start|%s test-model\n' "$(date +%s)" \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$LOG"
+result=$(run_post_bash "commit-stale" "echo observe")
+assert_eq "pre_session_commit_not_enumerated" "0" \
+  "$(count_events commit '' '' "$LOG")"
+assert_eq "pre_session_commit_no_prompt" "{}" "$result"
 
-# Test 11: missing event log (no session log on disk) still journals + prompts —
-# journal/systemMessage are document writes and advisory messages, not state.
+# Test 10b: anchor guard — a fallback-sid log carries "unknown" as its
+# session_start value; enumeration must be skipped entirely rather than feed
+# a non-ISO anchor to `git log --since` (plan-audit finding 1).
+setup_test
+mkdir -p "$_TEST_TMPDIR/.claude/cortex/sessions/test-week"
+mark_opted_in "$_TEST_TMPDIR/.claude"
+LOG="$_TEST_TMPDIR/.claude/cortex/sessions/test-week/commit-noanchor.events.log"
+printf '1700000000|session_start|unknown unknown\n' > "$LOG"
+make_commit "feat: commit with no valid anchor"
+result=$(run_post_bash "commit-noanchor" "echo observe")
+assert_eq "invalid_anchor_skips_enumeration" "0" \
+  "$(count_events commit '' '' "$LOG")"
+assert_eq "invalid_anchor_returns_empty" "{}" "$result"
+
+# Test 11: missing event log — no enumeration baseline exists, so the commit
+# flow is fully inert: no journal line, no prompt (a session that never
+# booted has no session window to attribute commits to).
 setup_test
 make_commit "docs: no session log test"
-result=$(run_post_bash "commit-no-log" "git commit -m test")
-assert_contains "missing_event_log_still_prompts" "$result" "Commit logged"
+result=$(run_post_bash "commit-no-log" "echo observe")
+assert_eq "missing_event_log_fully_inert" "{}" "$result"
 journal="$_TEST_TMPDIR/memory/$(date +%Y-%m-%d).md"
-assert_file_contains "missing_event_log_journal_written" "$journal" "no session log test"
+assert_not_contains "missing_event_log_no_journal_line" \
+  "$(cat "$journal")" "no session log test"
 
 # Test 12: non-amend commit with NO journal file — the hook contract (always
 # exit 0, valid JSON) must hold even when the journal is missing. Bypasses
@@ -220,6 +268,27 @@ LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "t-custom")
 run_post_bash "t-custom" "make check" > /dev/null
 assert_eq "custom_test_command_appends_custom" "custom" "$(last_event test_run "$LOG")"
 
+# The custom pattern is COMMAND-POSITION anchored by the caller (Codex plan
+# review I-8): the project configures the command, the anchoring is ours — a
+# grep/echo MENTION of the configured pattern must not forge tests_pass.
+setup_test
+set_config "$_TEST_TMPDIR/.claude" "test_command" "make check"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "t-custom-grep")
+run_post_bash "t-custom-grep" "grep -q 'make check' Makefile" > /dev/null
+assert_eq "custom_pattern_grep_mention_silent" "" "$(last_event test_run "$LOG")"
+
+setup_test
+set_config "$_TEST_TMPDIR/.claude" "test_command" "make check"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "t-custom-echo")
+run_post_bash "t-custom-echo" "echo make check" > /dev/null
+assert_eq "custom_pattern_echo_mention_silent" "" "$(last_event test_run "$LOG")"
+
+setup_test
+set_config "$_TEST_TMPDIR/.claude" "test_command" "make check"
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "t-custom-chained")
+run_post_bash "t-custom-chained" "cd sub && make check" > /dev/null
+assert_eq "custom_pattern_chained_still_fires" "custom" "$(last_event test_run "$LOG")"
+
 # --- JS/TS test detection is word-boundary anchored like the other languages
 # (Codex W4 review I-2): word-part lookalikes must not forge a test_run ---
 setup_test
@@ -242,18 +311,18 @@ LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "t-npmtest-anchored")
 run_post_bash "t-npmtest-anchored" "npm test" > /dev/null
 assert_eq "npm_test_still_fires" "vitest" "$(last_event test_run "$LOG")"
 
-# --- Commit event dedup against the last recorded commit (Codex W4 review
-# I-3, spec §3.3 "HEAD verified changed"): a matched command that created no
-# NEW commit within the recency window must not re-log the previous commit —
-# re-logging it after newer file_edits would falsely reset Gate 1's
-# edits-since-commit anchor ---
+# --- Commit event dedup by sha (spec §3.3 "HEAD verified changed"): an
+# already-observed sha is never re-logged — a duplicate appended after newer
+# file_edits would falsely reset Gate 1's edits-since-commit anchor. (The
+# race-safe backstop for async double-observation is read-side:
+# eio_edits_since_last_commit, tested in test-event-io.sh.) ---
 setup_test
 LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "commit-dedup")
 make_commit "feat: dedup base"
 run_post_bash "commit-dedup" "git commit -m feat-test" > /dev/null
 assert_eq "dedup_first_commit_logged" "1" "$(count_events commit '' '' "$LOG")"
 run_post_bash "commit-dedup" "echo git commit please" > /dev/null
-assert_eq "unquoted_mention_does_not_relog_same_sha" "1" "$(count_events commit '' '' "$LOG")"
+assert_eq "observed_sha_never_relogged" "1" "$(count_events commit '' '' "$LOG")"
 make_commit "feat: dedup second"
 run_post_bash "commit-dedup" "git commit -m feat-test-2" > /dev/null
 assert_eq "genuinely_new_commit_still_logged" "2" "$(count_events commit '' '' "$LOG")"

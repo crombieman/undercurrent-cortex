@@ -516,4 +516,62 @@ IREOF
 report=$(eio_intervention_report_dirs "$IRD2/.claude/cortex/sessions")
 assert_eq "ir_no_interventions_empty_report" "" "$report"
 
+# --- eio_edits_since_last_commit: race-safe Gate-1 derivation (calibration
+# wave, Codex plan-review C-2). The anchor is the LARGEST first-occurrence
+# line across DISTINCT commit shas — a duplicate commit event of an
+# already-seen sha (async PostToolUse double-observation) appended AFTER
+# newer file_edits must NOT move the anchor past those edits. ---
+
+ESC=$(mktemp -d)
+mkdir -p "$ESC/w"
+
+# No commits: every r edit counts; x edits never count.
+cat > "$ESC/w/no-commit.log" <<'ESCEOF'
+1700000001|session_start|2026-07-10T00:00:00Z m
+1700000002|file_edit|r C:/p/a.ts
+1700000003|file_edit|x C:/tmp/scratch.md
+1700000004|file_edit|r C:/p/b.ts
+ESCEOF
+assert_eq "esc_no_commit_counts_all_r_edits" "2" \
+  "$(eio_edits_since_last_commit "$ESC/w/no-commit.log")"
+
+# Plain case: edits after the last commit count, earlier ones don't.
+cat > "$ESC/w/plain.log" <<'ESCEOF'
+1700000001|session_start|2026-07-10T00:00:00Z m
+1700000002|file_edit|r C:/p/a.ts
+1700000003|commit|aaa1111 feat: one
+1700000004|file_edit|r C:/p/b.ts
+1700000005|file_edit|r C:/p/c.ts
+ESCEOF
+assert_eq "esc_edits_after_last_commit" "2" \
+  "$(eio_edits_since_last_commit "$ESC/w/plain.log")"
+
+# THE C-2 REGRESSION: duplicate sha appended after an intervening edit.
+# count_events file_edit r commit returns 0 here (the dup resets the anchor);
+# the first-observation anchor must still see the edit.
+cat > "$ESC/w/dup-race.log" <<'ESCEOF'
+1700000001|session_start|2026-07-10T00:00:00Z m
+1700000002|commit|aaa1111 feat: one
+1700000003|file_edit|r C:/p/a.ts
+1700000004|commit|aaa1111 feat: one
+ESCEOF
+assert_eq "esc_duplicate_sha_does_not_hide_edit" "1" \
+  "$(eio_edits_since_last_commit "$ESC/w/dup-race.log")"
+
+# Interleaved: A, edit, B, A-dup — anchor is B's first occurrence (the
+# largest first-occurrence line), so nothing after B counts.
+cat > "$ESC/w/interleave.log" <<'ESCEOF'
+1700000001|session_start|2026-07-10T00:00:00Z m
+1700000002|commit|aaa1111 feat: one
+1700000003|file_edit|r C:/p/a.ts
+1700000004|commit|bbb2222 feat: two
+1700000005|commit|aaa1111 feat: one
+ESCEOF
+assert_eq "esc_interleaved_dup_anchor_at_latest_distinct" "0" \
+  "$(eio_edits_since_last_commit "$ESC/w/interleave.log")"
+
+# Missing/empty file contract mirrors count_events: echoes 0.
+assert_eq "esc_missing_file_zero" "0" \
+  "$(eio_edits_since_last_commit "$ESC/w/does-not-exist.log")"
+
 end_suite

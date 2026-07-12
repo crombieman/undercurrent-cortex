@@ -92,8 +92,11 @@ add_reminder() {
   reminders="${reminders}- ${2}\n"
 }
 
-# Gate 1: Uncommitted changes
-edits=$(count_events file_edit r commit)
+# Gate 1: Uncommitted changes. Race-safe derivation (Codex plan-review C-2):
+# async PostToolUse handlers can double-observe a sha; the first-observation
+# anchor ignores duplicate commit events instead of letting one falsely
+# reset the count past newer edits.
+edits=$(eio_edits_since_last_commit)
 edits="${edits:-0}"
 if [ "$edits" -gt 0 ]; then
   # Belt-and-suspenders: verify with git status (catches gitignored,

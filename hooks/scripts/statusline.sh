@@ -22,7 +22,7 @@ HEALTH_FILE="$(eio_health_file)"
 PROPOSALS_FILE="$(eio_proposals_file)"
 
 # --- Line 1 data: session activity ---
-edits=$(count_events file_edit r commit)
+edits=$(eio_edits_since_last_commit)
 edits="${edits:-0}"
 commits=$(count_events commit)
 commits="${commits:-0}"

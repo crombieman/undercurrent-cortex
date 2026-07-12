@@ -95,9 +95,9 @@ if [ -n "$files_modified" ]; then
   summary="${summary}"$'\n\n'"Files modified (${file_count} unique):"$'\n'"${unique_files}"
 fi
 
-# Session counters
+# Session counters (edits via the race-safe first-observation anchor — C-2)
 commits=$(count_events commit)
-edits=$(count_events file_edit r commit)
+edits=$(eio_edits_since_last_commit)
 tests_run_count=$(count_events test_run)
 docs_updated_count=$(count_events docs_edit)
 tests_run=false

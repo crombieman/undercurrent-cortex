@@ -81,7 +81,9 @@ shopt -u nocasematch
 # per-project config — spec §7.1). commit_nudge_threshold config wins over the
 # feedback-derived threshold_set event when set to a genuine integer;
 # non-numeric config values are ignored (fall back to current behavior).
-edits=$(count_events "file_edit" "r" "commit")
+# Race-safe derivation (Codex plan-review C-2): duplicate commit events from
+# async double-observation never move the anchor past newer edits.
+edits=$(eio_edits_since_last_commit)
 threshold=$(last_event "threshold_set")
 threshold="${threshold:-15}"
 cfg_threshold=$(eio_config_get commit_nudge_threshold)

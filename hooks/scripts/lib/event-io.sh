@@ -183,6 +183,40 @@ eio_last_line_of() {
   ' "$file"
 }
 
+# eio_edits_since_last_commit [file]
+# Race-safe edits-since-commit derivation (calibration wave, Codex C-2): the
+# commit anchor is the LARGEST first-occurrence line across DISTINCT commit
+# shas (value's first token). PostToolUse runs async, so two Bash handlers can
+# double-observe the same sha; with the naive `count_events file_edit r commit`
+# anchor a duplicate appended AFTER newer file_edits would falsely reset the
+# count and hide uncommitted work from Gate 1 / the commit nudge. Dedup at
+# read time is race-free: a repeated sha never moves the anchor.
+eio_edits_since_last_commit() {
+  local file="${1:-$EVENT_LOG}"
+  [ -n "$file" ] && [ -f "$file" ] || { echo 0; return 0; }
+  awk '
+    { sub(/\r$/, "") }
+    !/^[0-9]+\|[a-z_]+\|/ { next }
+    {
+      rest = substr($0, index($0, "|") + 1)
+      t = substr(rest, 1, index(rest, "|") - 1)
+      v = substr(rest, index(rest, "|") + 1)
+      if (t == "commit") {
+        split(v, a, " ")
+        if (!(a[1] in seen)) { seen[a[1]] = 1; if (NR > anchor) anchor = NR }
+      } else if (t == "file_edit") {
+        split(v, a, " ")
+        if (a[1] == "r") { ln_of[++n] = NR }
+      }
+    }
+    END {
+      c = 0
+      for (i = 1; i <= n; i++) if (ln_of[i] > anchor) c++
+      print c
+    }
+  ' "$file"
+}
+
 # last_event <type> [file] — value of the most recent event of type (last-wins).
 last_event() {
   local type="$1" file="${2:-$EVENT_LOG}"

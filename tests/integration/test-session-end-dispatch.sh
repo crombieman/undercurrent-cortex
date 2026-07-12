@@ -246,9 +246,12 @@ health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
 assert_eq "v2_field1_sentinel" "v2" "$(v2_field "$health_file" 1)"
 assert_eq "v2_field2_date" "$TODAY" "$(v2_field "$health_file" 2)"
 assert_eq "v2_field3_session_id" "se-v2shape" "$(v2_field "$health_file" 3)"
-assert_eq "v2_field4_commits" "2" "$(v2_field "$health_file" 4)"
+# commits + fix_ratio are GIT-derived (same-provenance, queue item 3): with
+# no git repo the count is unknowable — 0 commits + null ratio, never the
+# event count (event commit events remain the Gate-1 anchor only).
+assert_eq "v2_field4_commits_no_git_is_zero" "0" "$(v2_field "$health_file" 4)"
 assert_eq "v2_field5_material_edits" "5" "$(v2_field "$health_file" 5)"
-assert_eq "v2_field6_fix_ratio_no_git_is_zero" "0.00" "$(v2_field "$health_file" 6)"
+assert_eq "v2_field6_fix_ratio_no_git_is_null" "null" "$(v2_field "$health_file" 6)"
 assert_eq "v2_field7_reverts" "0" "$(v2_field "$health_file" 7)"
 assert_eq "v2_field8_rework_files" "0" "$(v2_field "$health_file" 8)"
 assert_eq "v2_field9_tests_pass" "pass" "$(v2_field "$health_file" 9)"
@@ -356,6 +359,34 @@ run_session_end "se-fixratio" "$GITDIR" > /dev/null
 health_file="$GITDIR/.claude/cortex/health.local.md"
 assert_eq "fix_ratio_two_of_three" "0.67" "$(v2_field "$health_file" 6)"
 assert_eq "reverts_counts_capital_revert_no_colon" "1" "$(v2_field "$health_file" 7)"
+
+# --- Test 19b: SAME-PROVENANCE invariant (calibration wave, queue item 3):
+# the commits field and fix_ratio denominator come from the SAME git window
+# as the numerator — NEVER from event-log commit counts. Five seeded commit
+# events over a 2-commit git window must yield commits=2, fix_ratio=0.50
+# (the old event-count denominator produced impossible ratios like 5.00
+# live, from mixed provenance). ---
+setup_test
+GITDIR="$_TEST_TMPDIR/git-provenance"
+make_git_project "$GITDIR"
+mkdir -p "$GITDIR/memory"
+echo "# Journal" > "$GITDIR/memory/${TODAY}.md"
+now_epoch=$(date +%s)
+session_start_epoch=$((now_epoch - 300))
+session_start_iso=$(date -u -d "@${session_start_epoch}" +%Y-%m-%dT%H:%M:%SZ)
+commit_at "$GITDIR" "$((now_epoch - 200))" "fix: real one" "a.ts"
+commit_at "$GITDIR" "$((now_epoch - 100))" "chore: real two" "b.ts"
+create_event_log "$GITDIR/.claude" "se-provenance" \
+  "$((now_epoch + 1))|session_start|${session_start_iso} test-model" \
+  "$((now_epoch + 2))|commit|e1 fix: real one" \
+  "$((now_epoch + 3))|commit|e2 chore: real two" \
+  "$((now_epoch + 4))|commit|e3 phantom duplicate" \
+  "$((now_epoch + 5))|commit|e4 phantom duplicate" \
+  "$((now_epoch + 6))|commit|e5 phantom duplicate" > /dev/null
+run_session_end "se-provenance" "$GITDIR" > /dev/null
+health_file="$GITDIR/.claude/cortex/health.local.md"
+assert_eq "commits_field_is_git_window_count" "2" "$(v2_field "$health_file" 4)"
+assert_eq "fix_ratio_same_provenance" "0.50" "$(v2_field "$health_file" 6)"
 
 # --- Test 20: rework_files — intersection of files committed THIS session
 # with files touched by a commit in the 14 days before session_start ---

@@ -87,11 +87,17 @@ if [ -f "$journal" ] && grep -q '\[reasoning-miss\]' "$journal" 2>/dev/null; the
   self_misses=$(grep -c '\[reasoning-miss\]' "$journal" 2>/dev/null)
 fi
 
-# commits / material_edits — straight event-log counts, whole session.
-commits=$(count_events commit)
-commits="${commits:-0}"
+# material_edits — straight event-log count, whole session.
 material_edits=$(count_events file_edit r)
 material_edits="${material_edits:-0}"
+# commits: GIT-derived below, from the SAME --since window as fix_or_revert
+# (calibration wave, queue item 3 — same-provenance: the event-count
+# denominator under a git-count numerator produced impossible ratios like
+# 5.00 live). Event-log commit events remain the Gate-1 anchor only; the
+# ROW's commit fields are pure git. No git repo ⇒ the count is unknowable ⇒
+# 0 commits + null fix_ratio, never the event count. These are REPO-WINDOW
+# observations (any actor's commit in the checkout during the session window).
+commits=0
 
 # files_modified: ALL file_edit paths (r + x), flag stripped — feeds topology/
 # max_re_edits below. (The cross-session tracker it also used to feed was
@@ -181,10 +187,14 @@ reverts=0
 if [ "$has_git" = true ] && [ "$start_epoch" -gt 0 ]; then
   commit_subjects=$(git -C "$PROJECT_DIR" log --since="$session_start" --format=%s 2>/dev/null || true)
   if [ -n "$commit_subjects" ]; then
+    # commits = the same population the numerators count over (one subject
+    # line per commit in the window) — same-provenance by construction.
+    commits=$(printf '%s\n' "$commit_subjects" | wc -l | tr -d ' ')
     fix_or_revert_count=$(printf '%s\n' "$commit_subjects" | grep -icE '^(fix:|revert)' 2>/dev/null || true)
     reverts=$(printf '%s\n' "$commit_subjects" | grep -icE '^revert' 2>/dev/null || true)
   fi
 fi
+commits="${commits:-0}"
 fix_or_revert_count="${fix_or_revert_count:-0}"
 reverts="${reverts:-0}"
 
