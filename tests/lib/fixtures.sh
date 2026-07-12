@@ -107,13 +107,12 @@ set_config() {
 }
 
 # create_state_file <dir> <session_id> [overrides...]
-# Creates a well-formed state file. Overrides: "field=value" pairs.
+# Creates a well-formed LEGACY v3 state file. Overrides: "field=value" pairs.
 # Returns the file path.
-# LEGACY-ONLY (v3 reader tests; delete in 4.2) — the write surface that used
-# to produce these files (write_field/increment_field/append_to_section/
-# init_state_file) was deleted in the storage-conversion wave; this fixture
-# exists only to exercise state-io.sh's remaining read path
-# (read_field/read_section) until session-start drops its legacy reader.
+# Post-T4 purpose: simulates an INERT legacy artifact on disk (nothing reads
+# or writes these anymore — state-io.sh and the legacy carry-over reader are
+# deleted). Suites use it to prove leftover v3 files are ignored, not to
+# exercise any reader.
 create_state_file() {
   local dir="$1" sid="$2"
   shift 2
@@ -380,23 +379,14 @@ setup_script_sandbox() {
     ln -sf "$plugin_root/hooks/session-start" "$sandbox/hooks/session-start"
   fi
 
-  # Symlink non-state-io libraries
+  # Symlink all libraries (state-io.sh died in the calibration wave T4 —
+  # every lib is side-effect-free at source time now, no patching needed)
   for f in "$plugin_root/hooks/scripts/lib/"*.sh; do
     [ -f "$f" ] || continue
     local base
     base=$(basename "$f")
-    [ "$base" = "state-io.sh" ] && continue
     ln -sf "$f" "$sandbox/hooks/scripts/lib/$base"
   done
-
-  # Create patched state-io.sh — replace PROJECT_DIR with test tmpdir
-  sed "s|^PROJECT_DIR=.*|PROJECT_DIR=\"$tmpdir\"|" \
-    "$plugin_root/hooks/scripts/lib/state-io.sh" \
-    > "$sandbox/hooks/scripts/lib/state-io.sh"
-
-  # Disable migration in sandbox — no real state files to migrate, saves ~1.5s per invocation
-  sed -i 's/^  migrate_state_files$/  #migrate_state_files  # disabled in test sandbox/' \
-    "$sandbox/hooks/scripts/lib/state-io.sh"
 
   # Create cortex directory structure in sandbox
   mkdir -p "$tmpdir/.claude/cortex/sessions"

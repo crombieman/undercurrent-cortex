@@ -46,8 +46,8 @@ run_session_start() {
 # once at suite start. Unlike the other dispatcher suites, session-start is
 # the CREATOR of the event log (never a create_event_log consumer that would
 # re-stamp the sentinel as a side effect), so every test in this file must
-# re-mark the project opted-in itself (spec §4.3 gate). Un-opted-repo and
-# grandfathering behavior are tested separately in
+# re-mark the project opted-in itself (spec §4.3 gate). Un-opted-repo
+# behavior (incl. the T4 proof that grandfathering is GONE) is tested in
 # tests/integration/test-opt-in-gate.sh — every test below exercises normal
 # (already opted-in) session-start behavior.
 setup_opted_test() {
@@ -239,7 +239,9 @@ new_items=$(list_events carry_over "$NEW_LOG")
 assert_contains "reraised_item_resurfaces_in_new_log" "$new_items" "Reraised handling ccc"
 assert_contains "reraised_item_surfaced_in_output" "$result" "Reraised handling ccc"
 
-# --- Test 8: legacy *.local.md carry-over is still read + re-surfaced ---
+# --- Test 8: legacy *.local.md files are INERT (calibration T4: the legacy
+# carry-over reader died with state-io.sh — event logs are the SOLE carry-over
+# source; a leftover v3 file on disk is ignored, not surfaced) ---
 setup_opted_test
 sid="ss-legacy"
 mkdir -p "$_TEST_TMPDIR/.claude/cortex/sessions/legacy-week"
@@ -256,8 +258,10 @@ LEOF
 result=$(run_session_start "$(mock_json "session_id=$sid")")
 NEW_LOG="$(_eio_week_dir)/${sid}.events.log"
 new_items=$(list_events carry_over "$NEW_LOG")
-assert_contains "legacy_carryover_read_into_output" "$result" "Legacy carryover item"
-assert_contains "legacy_carryover_reappended_to_log" "$new_items" "Legacy carryover item"
+assert_not_contains "legacy_carryover_not_surfaced" "$result" "Legacy carryover item"
+assert_not_contains "legacy_carryover_not_reappended" "$new_items" "Legacy carryover item"
+assert_file_exists "legacy_file_left_on_disk_untouched" \
+  "$_TEST_TMPDIR/.claude/cortex/sessions/legacy-week/legacy-sess.local.md"
 
 # --- Test 9: NO .local.md state file is created for the new session ---
 setup_opted_test

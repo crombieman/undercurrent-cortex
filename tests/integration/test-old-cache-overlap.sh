@@ -136,15 +136,16 @@ assert_eq "old_scripts_no_local_md_created" "0" "$LOCAL_MD_COUNT"
 # contains NO files, only possibly empty dirs" prediction. Empirically
 # verified (see task-7-report.md) that source-time migrate_state_files()
 # DOES write .claude/cortex/.migrated-v3.7 (a one-line completion sentinel)
-# on a project with no sentinel yet — this is NOT unique to the archived old
-# scripts: the CURRENT v4 lib/state-io.sh (still sourced by session-start,
-# per hook-architecture.md) contains the exact same source-time
-# migrate_state_files() call and writes the identical sentinel. It is
-# idempotent (only the first of the 3 invocations above actually writes it;
-# the other two see the sentinel and skip) and inert to v4's event-log-based
-# reads. The two guarantees that actually matter for v4 correctness — event
-# log integrity and no *.local.md creation — are asserted explicitly above;
-# this assertion additionally proves nothing ELSE unexpected leaked out.
+# on a project with no sentinel yet. The writer here is the ARCHIVED tree's
+# own state-io.sh copy — the CURRENT plugin deleted state-io.sh entirely in
+# the calibration wave (T4), so live code can never write this sentinel; the
+# allowance below exists purely for the archived-scripts overlap scenario.
+# It is idempotent (only the first of the 3 invocations above actually
+# writes it; the other two see the sentinel and skip) and inert to v4's
+# event-log-based reads. The two guarantees that actually matter for v4
+# correctness — event log integrity and no *.local.md creation — are
+# asserted explicitly above; this assertion additionally proves nothing
+# ELSE unexpected leaked out.
 # ============================================================================
 TREE_AFTER=$(find "$PROJ/.claude" | sort)
 NEW_ENTRIES=$(comm -13 <(printf '%s\n' "$TREE_BEFORE") <(printf '%s\n' "$TREE_AFTER"))

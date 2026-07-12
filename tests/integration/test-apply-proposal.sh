@@ -6,7 +6,6 @@ source "$TESTS_DIR/lib/test-framework.sh"
 source "$TESTS_DIR/lib/fixtures.sh"
 
 PLUGIN_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-source "$PLUGIN_ROOT/hooks/scripts/lib/state-io.sh"
 
 begin_suite "apply-proposal"
 

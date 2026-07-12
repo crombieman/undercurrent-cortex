@@ -192,13 +192,15 @@ assert_eq "stop_gate_stale_suppressed_returns_empty" "{}" "$OUT_STALE"
 # ============================================================================
 # 5. session-end-dispatch.sh — discriminator: exactly one health row for
 # today in health.local.md (brief's explicit "session-end: exactly one
-# health row"). Fresh clean log — session gets tagged idle but a row is
-# still written (idle sessions are tracked, not skipped).
+# health row"). An r-edit is seeded so the session is NON-idle: since the
+# calibration wave (T2), genuinely idle sessions write no row at all — the
+# dual-fire subject here is the native/stale pair contract, not idle-skip.
 # ============================================================================
 setup_test
 PROJ="$_TEST_TMPDIR/proj-end"
 SID="df-end"
-create_event_log "$PROJ/.claude" "$SID" > /dev/null
+create_event_log "$PROJ/.claude" "$SID" \
+  "1700000001|file_edit|r ${_TEST_TMPDIR}/proj-end/src/a.ts" > /dev/null
 stamp_native_marker "$PROJ/.claude" "$SID"
 json=$(mock_json "session_id=$SID")
 HEALTH_FILE="$PROJ/.claude/cortex/health.local.md"

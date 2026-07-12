@@ -4,45 +4,29 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-# event-io.sh sourced first: pure function definitions, no source-time side
-# effects (unlike state-io.sh's migrate_state_files(), which does mkdir -p on
-# .claude/cortex/ unconditionally when sourced, unless already migrated).
-# Deferred below until AFTER the opt-in gate passes, so a genuinely un-opted
-# repo gets ZERO directory creation from sourcing alone (spec §4.3).
+# event-io.sh: pure function definitions, no source-time side effects. A
+# genuinely un-opted repo gets ZERO directory creation from sourcing alone
+# (spec §4.3). state-io.sh is GONE (calibration wave T4 = the v4.2 deletion
+# calendar): the v3.7 migration chain, legacy state readers, and
+# grandfathering all died with their era — `.claude/cortex/enabled` written
+# by /cortex:setup is the ONLY opt-in path.
 source "$SCRIPT_DIR/scripts/lib/event-io.sh" || { printf '{}'; exit 0; }
 source "$SCRIPT_DIR/scripts/lib/health-trend.sh" || { printf '{}'; exit 0; }
 
 # Buffer stdin to extract session_id
 HOOK_INPUT=$(cat)
 
-# --- Opt-in grandfathering (read-only probe) + gate (spec §4.3) ---
-# Runs before state-io.sh is sourced (its migrate_state_files() side effect
-# must never fire in a genuinely un-opted repo) and before any other work.
-# Grandfathering: a project with REAL prior use (health.local.md carrying
-# >=1 DATA row after the "---" separator — proof it predates opt-in gating,
-# not a drive-by repo where .claude/cortex/ exists only as an old
-# migrate_state_files side effect) gets the sentinel auto-created once.
-# Everything else requires running /cortex:setup.
-if [ ! -f "$(_eio_cortex_dir)/enabled" ]; then
-  _gf_health_file="$(_eio_cortex_dir)/health.local.md"
-  if [ -f "$_gf_health_file" ]; then
-    _gf_health_data=$(sed -n '/^---$/,$p' "$_gf_health_file" 2>/dev/null | tail -n +2)
-    if [ -n "$_gf_health_data" ] && printf '%s\n' "$_gf_health_data" | grep -q '|' 2>/dev/null; then
-      mkdir -p "$(_eio_cortex_dir)" 2>/dev/null || true
-      printf 'enabled %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$(_eio_cortex_dir)/enabled" 2>/dev/null || true
-    fi
-  fi
-fi
+# --- Opt-in gate (spec §4.3): the sentinel FILE, before any other work ---
 [ -f "$(_eio_cortex_dir)/enabled" ] || { printf '{}'; exit 0; }
 
-# session-start is the SINGLE sanctioned exception still allowed to source
-# state-io.sh (legacy carry-over reader + cleanup_stale_state_files, until
-# Task 4.2 — this wave's T4 — deletes both). event-io.sh (sourced above) is
-# the write path: this hook is the SOLE creator of the per-session
-# append-only event log.
-source "$SCRIPT_DIR/scripts/lib/state-io.sh" || { printf '{}'; exit 0; }
 source "$SCRIPT_DIR/scripts/lib/escape-json.sh" || { printf '{}'; exit 0; }
 source "$SCRIPT_DIR/scripts/lib/housekeeping.sh" || true
+
+# Path constants — via event-io helpers (state-io's source-time variable
+# block died with it in T4).
+PROJECT_DIR="$(eio_project_dir)"
+HEALTH_FILE="$(eio_health_file)"
+PROPOSALS_FILE="$(eio_proposals_file)"
 
 # Extract session_id from hook JSON (Claude Code provides this)
 HOOK_SESSION_ID=""
@@ -115,14 +99,11 @@ fi
 # Write current session_id to a known location so the session-end skill
 # can pass it to session-end-dispatch.sh, and read surfaces (statusline,
 # sensory mid-session) can resolve when their hook JSON lacks a session_id.
-mkdir -p "$CORTEX_DIR" 2>/dev/null || true
-echo "$HOOK_SESSION_ID" > "${CORTEX_DIR}/current-session.id" 2>/dev/null || true
+mkdir -p "$(_eio_cortex_dir)" 2>/dev/null || true
+echo "$HOOK_SESSION_ID" > "$(_eio_cortex_dir)/current-session.id" 2>/dev/null || true
 
 # Profile drives proposals/social/sensory/feedback gating below.
-PROFILE=$(get_profile)
-
-# --- Step 0: Cleanup stale state files (>24 hours old) ---
-cleanup_stale_state_files
+PROFILE=$(eio_get_profile)
 
 # --- Step 0b: Housekeeping (calibration wave, queue item 7: the healer is
 # DELETED — instrument-defect verdict, it never repaired damage it or its
@@ -133,41 +114,15 @@ if type cortex_housekeeping &>/dev/null; then
   cortex_housekeeping 2>/dev/null || true
 fi
 
-# --- Step 0c: Cleanup leftover bootstrap-injected settings.json entries ---
-# CLEANUP ONLY (Task 6): bootstrap-hooks.sh no longer injects anything — all
-# 7 events are natively registered in hooks.json (Task 5's --native marker
-# protocol makes any leftover settings.json entries structurally inert). This
-# call just removes leftovers from old plugin versions as best-effort
-# hygiene. See: https://github.com/anthropics/claude-code/issues/34573
-# DELETE THIS CALL (and the script) in v4.2 per spec §4.4.
-PLUGIN_ROOT="$PLUGIN_ROOT" "$SCRIPT_DIR/scripts/bootstrap-hooks.sh" 2>/dev/null || true
-
 # --- Step 1: Derive carry-over from prior sessions ---
-# Two sources merged: (a) legacy *.local.md state files (state-io read path —
-# session-start is the last reader of legacy state until Task 4.2) and (b) prior
-# append-only event logs. Surviving items are re-appended into the NEW log so
-# per-session derivations (stop-gate Gate 4, pre-compact hash reconcile) stay
-# single-log.
-
-# (a) Legacy: scan old state files' [carry_over] sections. Track the max
-# carry_over_age among files that actually carried items (v3 semantics).
+# Sole source: prior append-only event logs (the legacy *.local.md reader and
+# bootstrap-hooks.sh cleanup call died in T4 with state-io — settings.json
+# verified clean of hook entries at deletion time, see the T4 commit).
+# Surviving items are re-appended into the NEW log so per-session derivations
+# (stop-gate Gate 4, pre-compact hash reconcile) stay single-log.
 old_carry_over=""
-legacy_carry_age="0"
-for sf in "${SESSIONS_DIR}"/*/*.local.md "${STATE_DIR}"/cortex-state-*.local.md; do
-  [ -f "$sf" ] || continue
-  co=$(read_section "carry_over" "$sf")
-  if [ -n "$co" ]; then
-    old_carry_over="${old_carry_over}${co}"$'\n'
-    age=$(read_field "carry_over_age" "$sf")
-    age="${age:-0}"
-    case "$age" in *[!0-9]*) age=0 ;; esac
-    if [ "$age" -gt "$legacy_carry_age" ]; then
-      legacy_carry_age="$age"
-    fi
-  fi
-done
 
-# (b) Event logs: collect the 30-day-recent prior logs (mtime filter; skip the
+# Event logs: collect the 30-day-recent prior logs (mtime filter; skip the
 # log we just created), then let the shared eio_unresolved_items helper compute
 # the epoch-ordered unresolved set GLOBALLY across all of them (spec §3.5
 # amendment: latest carry_over epoch anywhere vs latest carry_addressed epoch
@@ -253,11 +208,8 @@ if [ -n "$old_carry_over" ]; then
   old_carry_over=$(echo "$old_carry_over" | grep -E '^[-*] |^TODO|^\[carry-over\]|^\[mid-session pin\]' | sort -u | sed '/^$/d' || true)
 fi
 
-# Max carry-over age across all prior sources (legacy state files + event logs).
-old_carry_over_age="$legacy_carry_age"
-if [ "$event_carry_age" -gt "$old_carry_over_age" ]; then
-  old_carry_over_age="$event_carry_age"
-fi
+# Max carry-over age across prior event logs (per-log survival max above).
+old_carry_over_age="$event_carry_age"
 
 # Re-append surviving carry-over into the NEW log + record the age event.
 # Same semantics as v3: increment age if carry-over persists, else reset to 0.

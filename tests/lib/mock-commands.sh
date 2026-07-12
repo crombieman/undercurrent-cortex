@@ -85,7 +85,12 @@ case "\$1" in
     shift  # consume -C flag
     shift  # consume directory argument
     case "\$1" in
-      log) echo "feat: test commit" ;;
+      # A mocked repo enumerates NO commits: the git-derived commit sensor
+      # (calibration T1) runs `git -C <dir> log --since=...` on EVERY Bash
+      # observation, so a canned subject here would forge a phantom commit
+      # event in every mock-git suite. (The old canned "feat: test commit"
+      # served the deleted lexical path's subject fetch.)
+      log) : ;;
       diff)
         case "$behavior" in
           has-lessons)

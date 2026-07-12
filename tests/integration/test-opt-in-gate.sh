@@ -255,12 +255,13 @@ assert_eq "session_start_fresh_returns_empty" "{}" "$result"
 assert_tree_unchanged "session_start_fresh_no_new_files" "$before" "$after"
 
 # ============================================================================
-# Group 2: session-start grandfathering (spec §4.3)
+# Group 2: grandfathering is DELETED (calibration wave T4, the v4.2 deletion
+# calendar) — the sentinel FILE written by /cortex:setup is the ONLY opt-in
+# path. The flipped expectation below is the RED-first proof: a repo with a
+# REAL prior health file but no sentinel now gets {} and ZERO writes (the
+# pre-4.0 migration window is closed by definition on a solo instrument).
 # ============================================================================
 
-# --- Grandfathering succeeds: health.local.md has >=1 real data row (proof
-# of prior use predating opt-in gating) — sentinel is auto-created and
-# session-start proceeds with its normal output.
 setup_test
 PROJ="$_TEST_TMPDIR/proj-ss-grandfather"
 create_unopted_dir "$PROJ/.claude" > /dev/null
@@ -268,21 +269,21 @@ mkdir -p "$PROJ/.claude/cortex"
 create_health_file "$PROJ/.claude/cortex/health.local.md" \
   "2026-07-01|0|1.0|true|0|0|0|0|10|1|focused|proj"
 SENTINEL="$PROJ/.claude/cortex/enabled"
+before=$(find "$PROJ/.claude" | sort)
 json=$(mock_json "session_id=uo-grandfather")
 set +e
 result=$(printf '%s' "$json" | CORTEX_PROJECT_DIR="$PROJ" HOME="$PROJ" bash "$PLUGIN_ROOT/hooks/session-start" 2>/dev/null)
 rc=$?
 set -e
-assert_eq "grandfather_exit_0" "0" "$rc"
-assert_file_exists "grandfather_creates_sentinel" "$SENTINEL"
-assert_contains "grandfather_sentinel_has_enabled_marker" "$(cat "$SENTINEL" 2>/dev/null)" "enabled "
-assert_json_valid "grandfather_output_valid_json" "$result"
-assert_contains "grandfather_proceeds_normally" "$result" "cortex-session-start"
+after=$(find "$PROJ/.claude" | sort)
+assert_eq "no_grandfather_exit_0" "0" "$rc"
+assert_eq "no_grandfather_returns_empty" "{}" "$result"
+assert_eq "no_grandfather_no_sentinel_created" "no" "$([ -f "$SENTINEL" ] && echo yes || echo no)"
+assert_tree_unchanged "no_grandfather_zero_writes" "$before" "$after"
 
-# --- Grandfathering does NOT trigger on a header-only health file (zero data
-# rows — the "# Fields: ...|...|..." header comment itself contains pipes,
-# so the check must scope to content AFTER the "---" separator, not just
-# grep -q '|' over the whole file). Gate fires: {}, no sentinel, no new files.
+# --- Header-only health file: same outcome (kept as a distinct shape — the
+# pre-T4 grandfather predicate treated these differently; both are now
+# identically inert). ---
 setup_test
 PROJ="$_TEST_TMPDIR/proj-ss-headeronly"
 create_unopted_dir "$PROJ/.claude" > /dev/null

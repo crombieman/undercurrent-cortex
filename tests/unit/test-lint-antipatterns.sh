@@ -43,13 +43,16 @@ assert_eq "scanner_catches_bypass_variants" "4" "$hit_count"
 assert_not_contains "scanner_skips_comments_and_clean" "$hits" "e.sh"
 assert_not_contains "scanner_skips_guarded_form" "$hits" "f.sh"
 
-# --- deleted state-io write surface must never reappear (comment-line-tolerant) ---
-# write_field/increment_field/append_to_section/resolve_state_file/
-# init_state_file/validate_state_file were deleted from state-io.sh in the
-# storage-conversion wave (Task 10) — hooks write exclusively through the
-# append-only event log now. Their DEFINITIONS may only remain in state-io.sh
-# itself (which the deletion left with read_field/read_section/get_profile/
-# cleanup_stale_state_files/migrate_state_files/normalize_path).
+# --- the deleted state-io API must never reappear (comment-line-tolerant) ---
+# The write surface (write_field/increment_field/append_to_section/
+# resolve_state_file/init_state_file/validate_state_file) died in the
+# storage-conversion wave; the ENTIRE remaining file — read path
+# (read_field/read_section), migration chain (migrate_state_files),
+# get_profile, cleanup_stale_state_files — plus the healer
+# (validate_organism) died in the calibration wave (T3/T4 = the v4.2
+# deletion calendar). eio_get_profile is the only profile reader; the
+# hand-rolled word boundary below keeps its `_get_profile` tail from
+# false-positiving on the bare name.
 # Word boundaries are hand-rolled as (^|[^A-Za-z0-9_])...([^A-Za-z0-9_]|$)
 # because \y is gawk-only — ubuntu CI runs mawk, where \y silently matches
 # nothing and the scanner goes blind. The explicit form is POSIX ERE and keeps
@@ -58,30 +61,34 @@ scan_for_deleted_state_io_calls() {
   awk '
     { sub(/\r$/, "") }
     /^[[:space:]]*#/ { next }
-    /(^|[^A-Za-z0-9_])(write_field|increment_field|append_to_section|resolve_state_file|init_state_file|validate_state_file)([^A-Za-z0-9_]|$)/ {
+    /(^|[^A-Za-z0-9_])(write_field|increment_field|append_to_section|resolve_state_file|init_state_file|validate_state_file|migrate_state_files|read_field|read_section|get_profile|cleanup_stale_state_files|validate_organism)([^A-Za-z0-9_]|$)/ {
       printf "%s:%d:%s\n", FILENAME, FNR, $0
     }
   ' "$@" 2>/dev/null
 }
 
-mapfile -t hook_files_all < <(find "$PLUGIN_ROOT/hooks" -type f \( -name '*.sh' -o -name 'session-start' \) ! -name 'state-io.sh')
+mapfile -t hook_files_all < <(find "$PLUGIN_ROOT/hooks" -type f \( -name '*.sh' -o -name 'session-start' \))
 hits=$(scan_for_deleted_state_io_calls "${hook_files_all[@]}")
-assert_eq "no_deleted_state_io_write_calls_outside_state_io" "" "$hits"
+assert_eq "no_deleted_state_io_calls_in_hooks" "" "$hits"
 
 # --- scanner catches a planted violation (fixture) ---
 FIX2=$(mktemp -d)
 printf 'write_field "commits_count" "1" "$STATE_FILE"\n' > "$FIX2/violation.sh"
 printf '# write_field is mentioned only in a comment here\nok=1\n' > "$FIX2/clean-comment.sh"
-printf 'result=$(read_field "session_id" "$STATE_FILE")\n' > "$FIX2/clean-read.sh"
+# read_field joined the dead list in T4 (whole read path deleted) — the old
+# "unrelated read call is clean" fixture is now itself a planted violation.
+printf 'result=$(read_field "session_id" "$STATE_FILE")\n' > "$FIX2/read-violation.sh"
 printf 'my_write_field_wrapper x\n' > "$FIX2/clean-wrapper.sh"
+printf 'p=$(eio_get_profile)\n' > "$FIX2/clean-eio-profile.sh"
 
 hits2=$(scan_for_deleted_state_io_calls "$FIX2"/*.sh)
 hit_count2=$(printf '%s' "$hits2" | awk 'NF { c++ } END { print c + 0 }')
-assert_eq "scanner_catches_planted_violation" "1" "$hit_count2"
+assert_eq "scanner_catches_planted_violations" "2" "$hit_count2"
 assert_contains "scanner_flags_violation_file" "$hits2" "violation.sh"
+assert_contains "scanner_flags_dead_read_call" "$hits2" "read-violation.sh"
 assert_not_contains "scanner_skips_comment_only_mention" "$hits2" "clean-comment.sh"
-assert_not_contains "scanner_skips_unrelated_read_call" "$hits2" "clean-read.sh"
 assert_not_contains "scanner_skips_wrapper_names" "$hits2" "clean-wrapper.sh"
+assert_not_contains "scanner_skips_eio_get_profile" "$hits2" "clean-eio-profile.sh"
 
 # --- W7 (spec §12): temp-file-rewrite idioms are allowlist-only ---
 # The event-log architecture bans mutation structurally; this scan keeps it
@@ -107,14 +114,13 @@ scan_for_rewrite_idioms() {
 
 # filter_rewrite_allowlist — drops hits matching the sanctioned (file, target)
 # pairs; whatever survives is a violation. Targets, all documents:
-#   state-io.sh             flat_health migration rewrite (dies in 4.2)
 #   session-start           PROPOSALS_FILE surfaced_count bump (boot, single writer)
 #   apply-proposal.sh       PROPOSALS_FILE status transitions (user command)
 #   synthesis-automation.sh COLLAB_FILE promotion sweep (boot, single writer)
-# REMOVED (calibration wave, queue item 7 — health.local.md is create-once +
-# append-only now; the lint FAILS if either rewrite pattern reappears):
+# REMOVED (calibration wave — the lint FAILS if any of these reappear):
 #   validate-organism.sh    healer deleted outright (instrument-defect verdict)
 #   session-end-dispatch.sh header-strip deleted (ends the two-writer race class)
+#   state-io.sh             file deleted entirely (T4, v4.2 deletion calendar)
 filter_rewrite_allowlist() {
   awk '
     {
@@ -122,8 +128,7 @@ filter_rewrite_allowlist() {
       sub(/:.*$/, "", file)      # strip first ":" onward (POSIX-style paths)
       sub(/.*\//, "", file)      # basename
       allowed = 0
-      if (file == "state-io.sh" && $0 ~ /flat_health\.tmp\.\$\$/) allowed = 1
-      else if (file == "session-start" && $0 ~ /PROPOSALS_FILE\.tmp\.\$\$/) allowed = 1
+      if (file == "session-start" && $0 ~ /PROPOSALS_FILE\.tmp\.\$\$/) allowed = 1
       else if (file == "apply-proposal.sh" && $0 ~ /PROPOSALS_FILE\.tmp\.\$\$/) allowed = 1
       else if (file == "synthesis-automation.sh" && $0 ~ /COLLAB_FILE[}]?\.tmp\.\$\$/) allowed = 1
       if (!allowed) print
