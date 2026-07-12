@@ -73,11 +73,13 @@ elif [ "$ht_verdict" = "improving" ]; then
   heart="💚"; status="thriving"
 fi
 
-# Trailing trend segment: below the read threshold, show the honest raw
-# session count instead of an arrow/verdict pair (spec §6.2 — "📊 N sessions
-# tracked — trend at 10"; N = ht_total, which counts legacy rows too).
+# Trailing trend segment: below the read threshold, show the ELIGIBLE count —
+# the number the trend predicate actually consumes (non-idle v2 rows), never
+# the raw total (calibration wave, queue item 4: "9 tracked — trend at 10"
+# displayed live while the real state was 2/10; legacy + idle rows padded a
+# number nothing reads).
 if [ -z "$ht_verdict" ]; then
-  trend_segment="📊 ${ht_total} sessions tracked — trend at 10"
+  trend_segment="📊 trend: ${ht_nonidle}/10 eligible sessions"
 else
   arrow="→"
   case "$ht_verdict" in

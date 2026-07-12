@@ -123,9 +123,11 @@ assert_eq "two_sids_same_date_two_rows" "2" "$(count_health_rows "$health_file")
 assert_file_contains "row_a_present" "$health_file" "|se-dedupA|"
 assert_file_contains "row_b_present" "$health_file" "|se-dedupB|"
 
-# --- Test 5: self_misses (field 14) counted from journal [reasoning-miss] tags ---
+# --- Test 5: self_misses (field 14) counted from journal [reasoning-miss] tags
+# (an r-edit is seeded so the session is non-idle and actually writes a row) ---
 setup_test
-create_event_log "$_TEST_TMPDIR/.claude" "se-miss" > /dev/null
+create_event_log "$_TEST_TMPDIR/.claude" "se-miss" \
+  "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/a.ts" > /dev/null
 mkdir -p "$_TEST_TMPDIR/memory"
 cat > "$_TEST_TMPDIR/memory/${TODAY}.md" << 'JEOF'
 # Journal
@@ -206,16 +208,38 @@ health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
 assert_eq "topology_focused" "focused" "$(v2_field "$health_file" 12)"
 assert_eq "domain_under_3_redits_mixed" "mixed" "$(v2_field "$health_file" 13)"
 
-# --- Test 10: Idle session (zero activity, empty journal) → topology stays
-# "focused" (no re-edits to escalate it), domain="idle" (zero r-edits — the
-# v2 idle signal; there is no separate topology=idle state anymore) ---
+# --- Test 10: Idle session (zero r-edits) writes NO row (calibration wave,
+# queue item 5: idle/twin boots were 5 of 7 live v2 rows, polluting the
+# trend denominator). health_written is still appended so the skill/
+# dispatcher double-fire dedup keeps working; the file is left UNTOUCHED
+# (an idle session performs zero health-file mutations). ---
 setup_test
-create_event_log "$_TEST_TMPDIR/.claude" "se-idle" > /dev/null
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "se-idle")
 make_journal "$_TEST_TMPDIR"
 run_session_end "se-idle" > /dev/null
 health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
-assert_eq "topology_focused_when_idle" "focused" "$(v2_field "$health_file" 12)"
-assert_eq "domain_idle_when_zero_redits" "idle" "$(v2_field "$health_file" 13)"
+assert_eq "idle_session_writes_no_row" "0" "$(count_health_rows "$health_file")"
+assert_contains "idle_session_marks_health_written" \
+  "$(list_events health_written "$LOG")" "idle-skipped"
+run_session_end "se-idle" > /dev/null
+assert_eq "idle_session_rerun_still_no_row" "0" "$(count_health_rows "$health_file")"
+
+# --- Test 10b: idle skip leaves an EXISTING health file byte-identical —
+# prior rows survive and no header/strip mutation happens. ---
+setup_test
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "se-idle2")
+make_journal "$_TEST_TMPDIR"
+health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
+mkdir -p "$(dirname "$health_file")"
+cat > "$health_file" <<'HEOF'
+# Cortex Health Log
+# Fields: v2|date|session_id|commits|material_edits|fix_ratio|reverts|rework_files|tests_pass|duration_min|max_re_edits|topology|domain|self_misses
+v2|2026-06-01|prior-sid|2|5|0.00|0|0|pass|10|3|iterating|src|0
+HEOF
+before=$(cat "$health_file")
+run_session_end "se-idle2" > /dev/null
+after=$(cat "$health_file")
+assert_eq "idle_skip_leaves_health_file_untouched" "$before" "$after"
 
 # --- Test 11: High-churn topology (6+ re-edits of the same file) ---
 setup_test
@@ -307,13 +331,17 @@ health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
 assert_eq "domain_under_3_is_mixed" "mixed" "$(v2_field "$health_file" 13)"
 
 # Test 17: zero r-edits -> idle (x-flagged edits don't count toward domain)
+# -> the idle classification now means NO ROW (queue item 5): a session of
+# purely external/gitignored edits is still idle from the repo's viewpoint.
 setup_test
 LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "se-dom-zero")
 seed_file_edit "$LOG" x "${_TEST_TMPDIR}/.claude/plans/scratch.md"
 make_journal "$_TEST_TMPDIR"
 run_session_end "se-dom-zero" > /dev/null
 health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
-assert_eq "domain_zero_redits_is_idle" "idle" "$(v2_field "$health_file" 13)"
+assert_eq "x_only_session_is_idle_no_row" "0" "$(count_health_rows "$health_file")"
+assert_contains "x_only_session_marks_health_written" \
+  "$(list_events health_written "$LOG")" "idle-skipped"
 
 # --- Test 18: header strip — a pre-existing v3-style header (trend_direction=/
 # avg_*=/---) is idempotently removed on session-end, and stays gone on a

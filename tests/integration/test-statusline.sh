@@ -129,12 +129,15 @@ line2=$(echo "$result" | tail -1)
 assert_contains "no_log_zero_edits" "$line1" "0 edits"
 assert_contains "no_log_zero_commits" "$line1" "0 commits"
 assert_contains "no_log_default_adapting" "$line2" "💛 adapting"
-assert_contains "no_log_raw_count_below_threshold" "$line2" "📊 0 sessions tracked — trend at 10"
+assert_contains "no_log_eligible_count_below_threshold" "$line2" "📊 trend: 0/10 eligible sessions"
 
-# --- Test 6b: SOME rows present (legacy + v2) but still below the >=10
-# non-idle-v2 threshold — the raw-count line shows the TOTAL (legacy + v2),
-# per spec §6.2 ("legacy rows counted for the N display, excluded from
-# median math"). ---
+# --- Test 6b: SOME rows present (legacy + v2 + an idle v2) but still below
+# the >=10 non-idle-v2 threshold — the segment shows the ELIGIBLE count (the
+# number the predicate actually consumes), NOT the raw total (calibration
+# wave, queue item 4: '9 tracked — trend at 10' displayed while the real
+# state was 2/10 — the raw total answered a question nobody asked and misled
+# the one that mattered). Legacy and idle rows are visible in the file but
+# never eligible. ---
 setup_test
 create_event_log "$_TEST_TMPDIR/.claude" "sl-belowten" > /dev/null
 health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
@@ -142,10 +145,11 @@ create_health_file "$health_file" \
   "2026-05-01|0|1.0|true|0|0|0|0|10|1|focused|proj" \
   "2026-05-02|0|1.0|true|0|0|0|0|10|1|focused|proj" \
   "v2|2026-06-01|old-sid-1|2|5|0.00|0|0|pass|10|3|iterating|src|0" \
-  "v2|2026-06-02|old-sid-2|2|5|0.00|0|0|pass|10|3|iterating|src|0"
+  "v2|2026-06-02|old-sid-2|2|5|0.00|0|0|pass|10|3|iterating|src|0" \
+  "v2|2026-06-03|old-sid-3|0|0|null|0|0|none|5|0|focused|idle|0"
 result=$(run_statusline "{\"session_id\":\"sl-belowten\"}")
 line2=$(echo "$result" | tail -1)
-assert_contains "below_threshold_counts_legacy_and_v2" "$line2" "📊 4 sessions tracked — trend at 10"
+assert_contains "below_threshold_shows_eligible_count" "$line2" "📊 trend: 2/10 eligible sessions"
 
 # --- Test 7: readonly resolver falls back to current-session.id marker when
 # the hook JSON arg has no session_id (statusline polled without full context) ---

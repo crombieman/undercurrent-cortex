@@ -245,6 +245,22 @@ if [ "$(count_events health_written)" -gt 0 ]; then
   exit 0
 fi
 
+# --- Idle skip (calibration wave, queue item 5): a genuinely idle session —
+# zero r-flagged edits AND zero commits in the git window — writes NO row.
+# Idle/twin boots (which have both zeros) were 5 of 7 live v2 rows, drowning
+# the trend denominator. A commits-only session is NOT idle: it keeps its row
+# (domain stays "idle" as an edit-activity label; the trend's domain filter
+# already excludes it from medians). health_written is still appended so the
+# skill/dispatcher double-fire dedup above keeps working; the value records
+# the skip. Placed BEFORE any file mutation: a skipped session leaves
+# health.local.md untouched entirely (read-side idle filters in
+# health-trend.sh stay as defense for legacy idle rows already on disk). ---
+if [ "$domain" = "idle" ] && [ "${commits:-0}" -eq 0 ]; then
+  append_event "health_written" "$today idle-skipped"
+  printf '{}'
+  exit 0
+fi
+
 # --- Write to health file ---
 mkdir -p "$(dirname "$HEALTH_FILE")" 2>/dev/null || true
 
