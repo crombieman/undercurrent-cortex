@@ -151,8 +151,10 @@ result=$(run_statusline "{\"session_id\":\"sl-belowten\"}")
 line2=$(echo "$result" | tail -1)
 assert_contains "below_threshold_shows_eligible_count" "$line2" "📊 trend: 2/10 eligible sessions"
 
-# --- Test 7: readonly resolver falls back to current-session.id marker when
-# the hook JSON arg has no session_id (statusline polled without full context) ---
+# --- Test 7: the current-session.id fallback is DELETED (calibration T5) —
+# a leftover marker file is IGNORED: statusline with no sid renders the
+# honest unavailable line 1, never another session's numbers. With the sid
+# passed explicitly (as /cortex:status now does), the data renders. ---
 setup_test
 create_event_log "$_TEST_TMPDIR/.claude" "sl-marker" \
   "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/a.ts" \
@@ -162,7 +164,11 @@ mkdir -p "$_TEST_TMPDIR/.claude/cortex"
 echo "sl-marker" > "$_TEST_TMPDIR/.claude/cortex/current-session.id"
 result=$(run_statusline "")
 line1=$(echo "$result" | head -1)
-assert_contains "readonly_fallback_to_marker" "$line1" "3 edits"
+assert_contains "no_sid_renders_unavailable" "$line1" "session data unavailable"
+assert_not_contains "leftover_marker_never_resolves" "$line1" "3 edits"
+result=$(run_statusline "{\"session_id\":\"sl-marker\"}")
+line1=$(echo "$result" | head -1)
+assert_contains "explicit_sid_renders_data" "$line1" "3 edits"
 
 # --- Test 8: intervention follow-through third line (spec §6.3, T5p2) ---
 # One nudge followed by a commit (followed 1/1), one codex reminder never

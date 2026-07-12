@@ -4,46 +4,23 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$SCRIPT_DIR/lib/event-io.sh" || { printf '{}'; exit 0; }
 
-# --native flag (Task 5: native hooks.json registration): consumed before any
-# other arg handling. Its ABSENCE plus the native-hooks.ok marker (written
-# every session by session-start once its opt-in gate passes) means this
-# invocation is the stale ~/.claude/settings.json bootstrap-hooks.sh entry
-# firing alongside the native hooks.json registration — see the
-# native-suppression check below.
-NATIVE=false
-[ "${1:-}" = "--native" ] && { NATIVE=true; shift; }
+# The --native flag + native-hooks.ok marker suppression protocol is DELETED
+# (calibration wave T5): it existed to suppress stale settings.json
+# bootstrap-era entries, and T4 verified that era's entries are gone before
+# deleting the cleanup machinery. A leftover marker file on disk is inert.
 
 # Buffer stdin (SessionEnd may or may not provide JSON)
 INPUT=$(cat)
 
-# session_id, extracted once up front — used both by the native-suppression
-# check below AND (v2) as the health row's own session_id field / per-sid
-# dedup key. Same extraction resolve_event_log uses internally, so this is
-# guaranteed to match whatever EVENT_LOG gets resolved to.
+# session_id, extracted once up front — (v2) the health row's own session_id
+# field / per-sid dedup key. Same extraction resolve_event_log uses
+# internally, so this is guaranteed to match whatever EVENT_LOG resolves to.
 SESSION_ID=$(_eio_extract_sid "$INPUT")
 
 # Opt-in gate (spec §4.3): un-opted repos are fully inert. Directory
 # existence is NOT the signal — only the explicit sentinel file, written by
-# /cortex:setup or session-start's grandfathering check.
+# /cortex:setup.
 [ -f "$(_eio_cortex_dir)/enabled" ] || { printf '{}'; exit 0; }
-
-# Native dual-fire suppression (spec §4.2, hardened Codex I-2): suppress ONLY
-# when the native-hooks.ok marker's 3rd token (session_id, written by
-# session-start THIS session) equals THIS payload's session_id — proof native
-# registration is demonstrably alive for this very session. A marker with a
-# mismatched or missing 3rd token (downgrade, legacy 2-token marker), or a
-# payload carrying no session_id, does NOT suppress (compat: proceed normally).
-# Presence alone is insufficient — it can outlive an active native registration.
-if [ "$NATIVE" != true ]; then
-  _marker="$(_eio_cortex_dir)/native-hooks.ok"
-  if [ -f "$_marker" ]; then
-    _marker_sid=$(awk 'NR==1{print $3}' "$_marker" 2>/dev/null | tr -d '[:space:]' || true)
-    if [ -n "$SESSION_ID" ] && [ "$_marker_sid" = "$SESSION_ID" ]; then
-      printf '{}'
-      exit 0
-    fi
-  fi
-fi
 
 # Resolve session-scoped event log from session_id in hook JSON. This script
 # WRITES (health_written event), so it must use the write resolver — the

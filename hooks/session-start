@@ -64,23 +64,10 @@ HOOK_SESSION_ID=$(_eio_sanitize_sid "$HOOK_SESSION_ID")
 # concurrent boots in the same second collision-resistant (distinct log files).
 [ -z "$HOOK_SESSION_ID" ] && HOOK_SESSION_ID="$(date +%s)-$$"
 
-# --- Native hooks marker (Task 5, spec §4.2; hardened Codex I-2) ---
-# session-start is native by definition — it has always run from hooks.json,
-# never bootstrapped into settings.json — so writing this marker here (once the
-# opt-in gate passes) is the single signal the other 6 dispatchers use to
-# detect that hooks.json now handles their event too this session, and suppress
-# the stale settings.json bootstrap entry (avoids double-firing / duplicate
-# event appends). Content is "<plugin_version> <utc-iso> <session_id>": the
-# THIRD token is written here (not just presence) so a dispatcher suppresses
-# ONLY when the marker's sid matches ITS payload's sid — proof native
-# registration ran for THIS very session (presence alone can survive a
-# downgrade/edge state and wrongly suppress). Written after HOOK_SESSION_ID is
-# finalized (needs the sid). Single writer, overwritten every session
-# (sanctioned) — no read-modify-write race with the dispatchers, which only
-# ever read it.
-_native_version=$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "${PLUGIN_ROOT}/.claude-plugin/plugin.json" 2>/dev/null | head -1) || true
-mkdir -p "$(_eio_cortex_dir)" 2>/dev/null || true
-printf '%s %s %s\n' "${_native_version:-unknown}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$HOOK_SESSION_ID" > "$(_eio_cortex_dir)/native-hooks.ok" 2>/dev/null || true
+# (The native-hooks.ok marker is DELETED — calibration wave T5. It proved
+# native registration to dispatchers so they could suppress bootstrap-era
+# settings.json double-fires; T4 verified that era's entries are gone and
+# removed the machinery. No shared mutable identity file replaces it.)
 
 # --- Create the per-session event log (the ONLY place it is created) ---
 # Line format: epoch|session_start|<iso8601-utc> <model_name>. The first value
@@ -96,11 +83,13 @@ if [ ! -f "$EVENT_LOG" ]; then
   printf '%s|session_start|%s %s\n' "$(date +%s)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "unknown" > "$EVENT_LOG" 2>/dev/null || true
 fi
 
-# Write current session_id to a known location so the session-end skill
-# can pass it to session-end-dispatch.sh, and read surfaces (statusline,
-# sensory mid-session) can resolve when their hook JSON lacks a session_id.
-mkdir -p "$(_eio_cortex_dir)" 2>/dev/null || true
-echo "$HOOK_SESSION_ID" > "$(_eio_cortex_dir)/current-session.id" 2>/dev/null || true
+# (current-session.id is DELETED — calibration wave T5, queue item 6: a
+# shared mutable singleton cannot survive multi-actor reality — a guest boot
+# clobbered it twice in one week, misattributing reads and nearly routing a
+# health row to the wrong log. The sid now travels EXPLICITLY: injected into
+# the boot context below, re-injected by pre-compact, passed as an argument
+# by the session-end skill and /cortex:status. No sid ⇒ surfaces degrade to
+# "unavailable" — never a guess.)
 
 # Profile drives proposals/social/sensory/feedback gating below.
 PROFILE=$(eio_get_profile)
@@ -238,7 +227,9 @@ fi
 # boot. The pulse below (~0.9 KB) keeps the actionable steps; per-session DATA
 # blocks (statusline, synthesis directive, carry-over, sensory, reports) are
 # unaffected. Full protocol is one skill invocation away.
-skill_content="## Session-start protocol (compact pulse — full protocol: /cortex:session-start)
+skill_content="Session id: ${HOOK_SESSION_ID} — when a skill needs to write session events (session-end ritual, carry_addressed), pass this EXACT id as the argument; if it is no longer in context, SKIP the write and say so — never guess a session id.
+
+## Session-start protocol (compact pulse — full protocol: /cortex:session-start)
 1. Read MEMORY.md, then read-or-create memory/$(date +%Y-%m-%d).md; write any carry-over surfaced below into it as the first entry. If a missed session-end warning appears below, run /cortex:session-end retrospectively first.
 2. Read ~/.cortex/synthesis/collaboration.md (full file) and ~/.cortex/synthesis/workflows/_index.md; complete the REQUIRED synthesis tasks listed above before addressing the user's message.
 3. Display the statusline lines above verbatim, plus a model-metadata line: 🤖 {model} · ⚡ {effort} · 🪟 {context window}.

@@ -24,7 +24,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/pre-dispatch.sh\" --native",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/pre-dispatch.sh\"",
             "timeout": 30,
             "async": false
           }
@@ -37,7 +37,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/post-dispatch.sh\" --native",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/post-dispatch.sh\"",
             "timeout": 30,
             "async": true
           }
@@ -50,7 +50,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/context-flow.sh\" --native",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/context-flow.sh\"",
             "async": false
           }
         ]
@@ -62,7 +62,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/stop-gate.sh\" --native",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/stop-gate.sh\"",
             "async": false
           }
         ]
@@ -74,7 +74,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-end-dispatch.sh\" --native",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-end-dispatch.sh\"",
             "async": false
           }
         ]
@@ -86,7 +86,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/pre-compact.sh\" --native",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/pre-compact.sh\"",
             "async": false
           }
         ]

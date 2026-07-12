@@ -91,24 +91,24 @@ See `examples/journal-entry.md` for a model journal entry with proper tags.
 **Step 6c — Mark resolved carry-over** (event-log emitter, only if carry-over was inherited):
 For each `[carry-over]` item that was surfaced at session-start and you verified as actually resolved this session, append an `addressed` marker to the current session's event log. Future sessions reconcile these markers by content hash and stop resurfacing the item (they also feed stop-gate Gate 4 — without an emitter, every carry-over-inheriting session stays blocked). Run once per resolved item, substituting its exact text:
 
+The session id comes from YOUR CONTEXT: the boot injection's `Session id: <sid>` line (re-injected at compaction by pre-compact). Substitute it for `<SID-FROM-CONTEXT>` below. If the line is nowhere in your context, SKIP this step and say so — a skipped marker just means the item resurfaces next session (self-healing); a GUESSED sid writes into another session's log. Never read a sid from a file and never guess one.
+
 ```bash
-SID=$(cat .claude/cortex/current-session.id 2>/dev/null || true) && EIO=$(ls -t ~/.claude/plugins/cache/undercurrent-studio/cortex/*/hooks/scripts/lib/event-io.sh 2>/dev/null | head -1 || true) && [ -n "$EIO" ] && [ -n "$SID" ] && source "$EIO" && resolve_event_log "{\"session_id\":\"${SID}\"}" && append_event carry_addressed "$(eio_item_hash "EXACT carry-over item text")" || echo "event-io not found — carry_addressed skipped"
+SID="<SID-FROM-CONTEXT>" && EIO=$(ls -t ~/.claude/plugins/cache/undercurrent-studio/cortex/*/hooks/scripts/lib/event-io.sh 2>/dev/null | head -1 || true) && [ -n "$EIO" ] && [ -n "$SID" ] && source "$EIO" && resolve_event_log "{\"session_id\":\"${SID}\"}" && append_event carry_addressed "$(eio_item_hash "EXACT carry-over item text")" || echo "event-io not found — carry_addressed skipped"
 ```
 
 Only mark items you genuinely resolved — do not blanket-close still-open carry-over. Items left open are re-surfaced by the next session-start automatically.
 
-**Step 7 — Write health row** (non-negotiable, every session):
-The SessionEnd hook is unreliable (~40% fire rate). The skill is the primary path for health row writes. Run this Bash command:
+**Step 7 — Write health row** (every session with a known sid):
+The skill is the primary path for health row writes; the native SessionEnd hook (which receives the sid in its own payload — ground truth) is the backup. Use the `Session id: <sid>` line from YOUR CONTEXT (boot injection, re-injected at compaction); substitute it for `<SID-FROM-CONTEXT>`. If it is not in your context, SKIP this step and note that the native SessionEnd hook will write the row — never guess a sid.
 
 ```bash
-SID=$(cat .claude/cortex/current-session.id 2>/dev/null || true) && SCRIPT=$(ls -t ~/.claude/plugins/cache/undercurrent-studio/cortex/*/hooks/scripts/session-end-dispatch.sh 2>/dev/null | head -1 || true) && [ -n "$SCRIPT" ] && echo "{\"session_id\":\"${SID}\"}" | bash "$SCRIPT" || echo "session-end-dispatch not found"
+SID="<SID-FROM-CONTEXT>" && SCRIPT=$(ls -t ~/.claude/plugins/cache/undercurrent-studio/cortex/*/hooks/scripts/session-end-dispatch.sh 2>/dev/null | head -1 || true) && [ -n "$SCRIPT" ] && echo "{\"session_id\":\"${SID}\"}" | bash "$SCRIPT" || echo "session-end-dispatch not found"
 ```
 
-This reads the current session_id (written by session-start) and pipes it as JSON to the dispatch script so it finds the correct state file. Without the session_id, the script may pick the wrong session.
-
-After running, verify `.claude/cortex/health.local.md` was updated — the last line's date should match today.
+After running, verify `.claude/cortex/health.local.md` — an idle session (zero r-edits, zero commits) legitimately writes NO row since the calibration wave; a working session's last row date should match today.
 If the script is not found, log `[system-health] session-end-dispatch not found — health row skipped` in the journal.
-The SessionEnd hook still runs as a backup if it fires, but the dedup guard (`health_written=true` in the state file) prevents duplicate rows.
+The per-sid dedup guard prevents duplicate rows when both the skill and the native hook run.
 
 **Step 8 — Display session statusline diff** (every session):
 Display the organism statusline at the end, showing what changed during the session. Compare the values from session start (displayed in your first response) against current values. Format:

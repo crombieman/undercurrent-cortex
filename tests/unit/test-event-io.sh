@@ -132,13 +132,16 @@ CORTEX_PROJECT_DIR_OVERRIDE="$TDIR3"
 resolve_event_log "$(printf '{\n  "session_id": "sid-pretty",\n  "tool_name": "Bash"\n}')"
 assert_eq "resolve_pretty_json" "$f3" "$EVENT_LOG"
 
-# --- resolve_event_log_readonly: falls back to current-session.id for reads ---
+# --- resolve_event_log_readonly: the current-session.id fallback is DELETED
+# (calibration wave T5) — a leftover marker file is IGNORED; without an
+# explicit sid, read resolution fails and surfaces render "unavailable"
+# (honest absence over a guest-clobbered marker's plausible-wrong session) ---
 mkdir -p "$TDIR3/.claude/cortex"
 printf 'sid-pretty\n' > "$TDIR3/.claude/cortex/current-session.id"
 resolve_event_log_readonly '{"no_sid":"here"}'
-assert_eq "readonly_falls_back_to_marker" "$f3" "$EVENT_LOG"
+assert_eq "readonly_ignores_leftover_marker" "" "$EVENT_LOG"
 
-# --- resolve_event_log (write path): does NOT use the marker fallback ---
+# --- resolve_event_log (write path): identically sid-only ---
 resolve_event_log '{"no_sid":"here"}'
 assert_eq "write_resolution_never_uses_marker" "" "$EVENT_LOG"
 unset CORTEX_PROJECT_DIR_OVERRIDE

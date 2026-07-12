@@ -9,7 +9,9 @@ Display the organism statusline showing current session activity and cross-sessi
 
 ## Steps
 
-1. Run: `bash "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/statusline.sh"`
+1. Find the `Session id: <sid>` line in your context (injected at boot by session-start, re-injected at compaction). Run, substituting it:
+   `bash "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/statusline.sh" "{\"session_id\":\"<SID-FROM-CONTEXT>\"}"`
+   If the sid is not in your context, run the script with no argument — line 1 will honestly read "session data unavailable" (never guess a session id).
 2. Display the output directly (two lines, plus a third interventions line when follow-through data exists) — do not wrap in code blocks or add commentary
 3. If the output is empty or the script fails, say: "Statusline unavailable — state files may not exist yet."
 

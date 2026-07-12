@@ -12,10 +12,16 @@ source "$SCRIPT_DIR/lib/health-trend.sh" || exit 0
 # only via already-gated dispatchers, so it needs its own gate.
 [ -f "$(_eio_cortex_dir)/enabled" ] || exit 0
 
-# Resolve event log — read-only surface (statusline never appends). Falls
-# back to current-session.id when the hook JSON arg lacks a session_id
-# (spec §3.4: appends require write resolution, but reads may use the marker).
+# Resolve event log — read-only surface (statusline never appends). No
+# singleton fallback (T5): /cortex:status passes the boot-injected sid as
+# the JSON arg; a bare invocation with no sid renders the honest
+# unavailable line instead of another session's numbers.
 resolve_event_log_readonly "${1:-}"
+# No sid at all ⇒ line 1 is unavailable (a known sid with a missing log
+# still renders zeros — "nothing recorded for THIS session" is honest data;
+# only sid-less resolution has no session to speak about).
+SESSION_DATA_AVAILABLE=true
+[ -z "$EVENT_LOG" ] && SESSION_DATA_AVAILABLE=false
 
 PROJECT_DIR="$(eio_project_dir)"
 HEALTH_FILE="$(eio_health_file)"
@@ -111,7 +117,11 @@ if [ -n "$ir" ]; then
 fi
 
 # --- Output ---
-printf '✏️  %s edits · 📦 %s commits · 🧪%s · 📄%s\n' "$edits" "$commits" "$tests_icon" "$docs_icon"
+if [ "$SESSION_DATA_AVAILABLE" = true ]; then
+  printf '✏️  %s edits · 📦 %s commits · 🧪%s · 📄%s\n' "$edits" "$commits" "$tests_icon" "$docs_icon"
+else
+  printf '✏️  session data unavailable (no session id)\n'
+fi
 printf '%s %s │ 🧠 %s absorbed │ 🧬 %s mutations queued │ %s\n' "$heart" "$status" "$lessons" "$proposals" "$trend_segment"
 [ -n "$intervention_line" ] && printf '%s\n' "$intervention_line"
 exit 0

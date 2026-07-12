@@ -86,8 +86,10 @@ assert_eq "session_start_second_token_is_model" "unknown" "$ss_second"
 setup_opted_test
 traversal_sid="../../../../escaped"
 run_session_start "$(mock_json "session_id=$traversal_sid")" > /dev/null
-MARKER="$_TEST_TMPDIR/.claude/cortex/current-session.id"
-fallback_sid=$(cat "$MARKER" 2>/dev/null | tr -d '[:space:]')
+# The fallback sid is observable as the created log's FILENAME (the
+# current-session.id marker that used to expose it is deleted — T5).
+fallback_log=$(ls "$(_eio_week_dir)"/*.events.log 2>/dev/null | head -1 || true)
+fallback_sid=$(basename "${fallback_log:-none}" .events.log)
 fallback_shape="invalid"
 if printf '%s' "$fallback_sid" | grep -qE '^[0-9]+-[0-9]+$'; then
   fallback_shape="epoch-pid"
@@ -173,13 +175,18 @@ run_session_start "$(mock_json "session_id=$sid")" > /dev/null
 NEW_LOG="$(_eio_week_dir)/${sid}.events.log"
 assert_eq "legacy_rows_excluded_from_trend_gate" "normal boot" "$(last_event mode_set "$NEW_LOG")"
 
-# --- Test 4: current-session.id marker written ---
+# --- Test 4: NO singleton identity files (calibration wave T5, queue item
+# 6): current-session.id and native-hooks.ok are DELETED — the sid travels
+# explicitly via the injected context (asserted below). A guest boot can no
+# longer clobber a shared marker because there is no shared marker. ---
 setup_opted_test
 sid="ss-marker"
-run_session_start "$(mock_json "session_id=$sid")" > /dev/null
-MARKER="$_TEST_TMPDIR/.claude/cortex/current-session.id"
-assert_file_exists "current_session_id_written" "$MARKER"
-assert_eq "current_session_id_content" "$sid" "$(cat "$MARKER" 2>/dev/null | tr -d '[:space:]')"
+result=$(run_session_start "$(mock_json "session_id=$sid")")
+assert_eq "no_current_session_id_created" "no" \
+  "$([ -f "$_TEST_TMPDIR/.claude/cortex/current-session.id" ] && echo yes || echo no)"
+assert_eq "no_native_hooks_marker_created" "no" \
+  "$([ -f "$_TEST_TMPDIR/.claude/cortex/native-hooks.ok" ] && echo yes || echo no)"
+assert_contains "sid_injected_into_context" "$result" "Session id: ${sid}"
 
 # --- Test 5: unaddressed carry-over in a prior event log resurfaces ---
 setup_opted_test

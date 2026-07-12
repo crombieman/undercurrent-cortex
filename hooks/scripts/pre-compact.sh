@@ -6,41 +6,19 @@ source "$SCRIPT_DIR/lib/event-io.sh"     || { printf '{}'; exit 0; }
 source "$SCRIPT_DIR/lib/json-extract.sh" || { printf '{}'; exit 0; }
 source "$SCRIPT_DIR/lib/escape-json.sh"  || { printf '{}'; exit 0; }
 
-# --native flag (Task 5: native hooks.json registration): consumed before any
-# other arg handling. Its ABSENCE plus the native-hooks.ok marker (written
-# every session by session-start once its opt-in gate passes) means this
-# invocation is the stale ~/.claude/settings.json bootstrap-hooks.sh entry
-# firing alongside the native hooks.json registration — see the
-# native-suppression check below.
-NATIVE=false
-[ "${1:-}" = "--native" ] && { NATIVE=true; shift; }
+# The --native flag + native-hooks.ok marker suppression protocol is DELETED
+# (calibration wave T5): it existed to suppress stale settings.json
+# bootstrap-era entries, and T4 verified that era's entries are gone before
+# deleting the cleanup machinery. A leftover marker file on disk is inert —
+# nothing reads it.
 
 # Buffer stdin ONCE (C1 fix — extract_json_field uses cat internally)
 INPUT=$(cat)
 
 # Opt-in gate (spec §4.3): un-opted repos are fully inert. Directory
 # existence is NOT the signal — only the explicit sentinel file, written by
-# /cortex:setup or session-start's grandfathering check.
+# /cortex:setup.
 [ -f "$(_eio_cortex_dir)/enabled" ] || { printf '{}'; exit 0; }
-
-# Native dual-fire suppression (spec §4.2, hardened Codex I-2): suppress ONLY
-# when the native-hooks.ok marker's 3rd token (session_id, written by
-# session-start THIS session) equals THIS payload's session_id — proof native
-# registration is demonstrably alive for this very session. A marker with a
-# mismatched or missing 3rd token (downgrade, legacy 2-token marker), or a
-# payload carrying no session_id, does NOT suppress (compat: proceed normally).
-# Presence alone is insufficient — it can outlive an active native registration.
-if [ "$NATIVE" != true ]; then
-  _marker="$(_eio_cortex_dir)/native-hooks.ok"
-  if [ -f "$_marker" ]; then
-    _marker_sid=$(awk 'NR==1{print $3}' "$_marker" 2>/dev/null | tr -d '[:space:]' || true)
-    _payload_sid=$(_eio_extract_sid "$INPUT")
-    if [ -n "$_payload_sid" ] && [ "$_marker_sid" = "$_payload_sid" ]; then
-      printf '{}'
-      exit 0
-    fi
-  fi
-fi
 
 # Resolve session-scoped event log from session_id in hook JSON
 resolve_event_log "$INPUT"
@@ -116,6 +94,15 @@ fi
 # whenever any remain, mirroring stop-gate.sh Gate 4's block condition.
 if [ -n "$carry_over" ]; then
   summary="${summary}"$'\n'"WARNING: Carry-over items not yet addressed."
+fi
+
+# Re-inject the session id so it survives compaction (calibration wave T5:
+# current-session.id is deleted — the sid travels explicitly via boot
+# injection + this re-injection; the session-end skill passes it as an
+# argument and must never guess one).
+_pc_sid=$(_eio_extract_sid "$INPUT")
+if [ -n "$_pc_sid" ]; then
+  summary="Session id: ${_pc_sid} — pass this EXACT id when a skill writes session events; never guess one."$'\n\n'"${summary}"
 fi
 
 # --- Output ---

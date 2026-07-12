@@ -94,18 +94,16 @@ resolve_event_log() {
 }
 
 # resolve_event_log_readonly — READ-ONLY surfaces only (/status, statusline).
-# Falls back to current-session.id when no session_id is available. A singleton
-# marker must never route another session's WRITES (spec §3.4).
+# The current-session.id singleton fallback is DELETED (calibration wave T5,
+# queue item 6): a guest boot clobbered the marker twice in one week, so a
+# read surface following it showed a plausible-WRONG session. Without an
+# explicit session_id the resolution simply fails and callers render
+# "unavailable" — honest absence over confident misattribution. (Kept as a
+# distinct name from resolve_event_log: read surfaces are still not allowed
+# to gate WRITES on their resolution — spec §3.4.)
 resolve_event_log_readonly() {
   local json="${1:-}"
   resolve_event_log "$json"
-  if [ -z "$EVENT_LOG" ] || [ ! -f "$EVENT_LOG" ]; then
-    local marker="$(_eio_cortex_dir)/current-session.id" sid=""
-    if [ -f "$marker" ]; then
-      sid=$(head -1 "$marker" | tr -d '[:space:]')
-      [ -n "$sid" ] && resolve_event_log "{\"session_id\":\"${sid}\"}"
-    fi
-  fi
 }
 
 # append_event <type> <value>

@@ -134,7 +134,9 @@ for ev, expected in TABLE.items():
 
     cmd = entry.get("command", "")
     report(f"uses_plugin_root_{ev}", "${CLAUDE_PLUGIN_ROOT}" in cmd, cmd)
-    report(f"ends_with_native_{ev}", cmd.rstrip().endswith("--native"), cmd)
+    # --native died with the marker suppression protocol (calibration T5);
+    # its reappearance would mean the bootstrap-era machinery crept back.
+    report(f"no_native_flag_{ev}", "--native" not in cmd, cmd)
     script_name = SCRIPT_NAMES[ev]
     report(f"correct_script_{ev}", script_name in cmd, cmd)
 

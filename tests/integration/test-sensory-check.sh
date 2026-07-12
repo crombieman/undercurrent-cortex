@@ -116,17 +116,23 @@ bash "$SANDBOX/hooks/scripts/sensory-check.sh" > /dev/null 2>/dev/null || true
 after=$(count_events sensory_check '' '' "$LOG")
 assert_eq "no_json_skips_sensory_check_append" "0" "$after"
 
-# Test 6c: Called without hook JSON, but a current-session.id marker exists —
-# reads still resolve via the readonly fallback (cooldown works), even though
-# writes are skipped.
+# Test 6c: Called without hook JSON while a LEFTOVER current-session.id file
+# exists — the marker fallback is DELETED (calibration T5): the file is
+# ignored, no sid resolves, and the contract that matters holds: exit 0 and
+# ZERO event appends (a sid-less invocation can never write into another
+# session's log — exactly the guest-clobber incident class this kills).
 setup_test
-create_event_log "$_TEST_TMPDIR/.claude" "sensory-marker" \
-  "1700000001|sensory_check|$(date -u +%Y-%m-%dT%H:%M:%SZ)" > /dev/null
+LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "sensory-marker" \
+  "1700000001|sensory_check|$(date -u +%Y-%m-%dT%H:%M:%SZ)")
 printf 'sensory-marker' > "$_TEST_TMPDIR/.claude/cortex/current-session.id"
 create_mock_git "$MOCK_BIN" "clean"
 create_mock_gh "$MOCK_BIN" "failure"
-result=$(bash "$SANDBOX/hooks/scripts/sensory-check.sh" --mid-session 2>/dev/null || true)
-assert_eq "marker_fallback_cooldown_applies_without_json" "" "$result"
+before_appends=$(count_events sensory_check '' '' "$LOG")
+rc=0
+bash "$SANDBOX/hooks/scripts/sensory-check.sh" --mid-session >/dev/null 2>&1 || rc=$?
+after_appends=$(count_events sensory_check '' '' "$LOG")
+assert_eq "leftover_marker_exit_zero" "0" "$rc"
+assert_eq "leftover_marker_no_append_to_other_session" "$before_appends" "$after_appends"
 rm -f "$_TEST_TMPDIR/.claude/cortex/current-session.id"
 
 # Test 7: Anti-hang regression guard — without GNU coreutils `timeout`, network

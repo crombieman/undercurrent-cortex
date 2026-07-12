@@ -5,11 +5,11 @@ set -euo pipefail
 # Outputs plain text (caller wraps in JSON).
 #
 # Usage: sensory-check.sh [--mid-session] [hook_json]
-# hook_json carries session_id for event-log resolution. session-start still
-# calls this without hook_json this wave (converted in a later task) — reads
-# degrade to the current-session.id marker fallback, and appends are skipped
-# entirely when no session_id can be resolved (spec §3.4: appends require an
-# attributable session).
+# hook_json carries session_id for event-log resolution. Without a resolvable
+# session_id, BOTH reads and appends degrade: the current-session.id marker
+# fallback is DELETED (calibration T5 — a leftover file is ignored), so a
+# sid-less call runs the scan without cooldown state and skips every append
+# (spec §3.4: appends require an attributable session).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$SCRIPT_DIR/lib/event-io.sh" || exit 0
@@ -34,9 +34,9 @@ fi
 resolve_event_log "$HOOK_JSON"
 WRITE_LOG="$EVENT_LOG"
 
-# Resolve the read-target log — falls back to current-session.id when
-# hook_json carries no session_id, so cooldown/delta reads still work even
-# when this script is called without JSON (e.g. session-start this wave).
+# Resolve the read-target log — sid-only (no marker fallback, T5): a
+# sid-less invocation reads nothing, so cooldown/delta checks no-op and the
+# scan proceeds stateless.
 resolve_event_log_readonly "$HOOK_JSON"
 READ_LOG="$EVENT_LOG"
 
