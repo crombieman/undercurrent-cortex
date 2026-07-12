@@ -31,6 +31,36 @@ run_post_edit "edit-inc" "${_TEST_TMPDIR}/src/lib/utils.ts" > /dev/null
 result=$(count_events file_edit r "" "$LOG")
 assert_eq "edit_increments_count" "3" "$result"
 
+# Test 1b: PATH-FORM mismatch must not break r-flag attribution (calibration
+# ledger case #1, found by the cs2-pro-demo-database lab test): hook payloads
+# carry Windows mixed-form paths (C:/...) while a NO-GIT project resolves
+# PROJECT_DIR via `pwd` in MSYS form (/c/...) — the raw prefix compare never
+# matched, so every edit in a git-less repo was silently x-flagged (Gate 1,
+# nudges, and health attribution all dead). Both sides must be normalized
+# before comparison. The two forms only coexist on Windows (cygpath); the
+# ubuntu leg asserts the normalize guard exists (same pattern as the
+# housekeeping symlink test).
+setup_test
+if command -v cygpath >/dev/null 2>&1; then
+  LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "edit-msysform")
+  mixed_dir=$(cygpath -m "$_TEST_TMPDIR")                          # C:/... mixed form
+  # Drive-form MSYS path built deterministically (cygpath -u may prefer the
+  # /tmp mount alias, which is NOT the /c/ drive form `pwd` yields in a
+  # real project dir).
+  msys_proj=$(printf '%s' "$mixed_dir" | sed 's|^\([A-Za-z]\):|/\L\1|')  # /c/... form
+  mixed_path="${mixed_dir}/src/lib/msysform.ts"
+  json=$(mock_json "session_id=edit-msysform" "tool_input.file_path=$mixed_path")
+  echo "$json" | CORTEX_PROJECT_DIR_OVERRIDE="$msys_proj" \
+    bash "$PLUGIN_ROOT/hooks/scripts/post-edit-dispatch.sh" > /dev/null 2>&1 || true
+  assert_eq "mixed_form_payload_still_r_flagged" "1" \
+    "$(count_events file_edit r '' "$LOG")"
+else
+  guard_present="missing"
+  grep -q 'normalize_path "$PROJECT_DIR"' "$PLUGIN_ROOT/hooks/scripts/post-edit-dispatch.sh" \
+    && guard_present="present"
+  assert_eq "flag_compare_normalizes_both_sides" "present" "$guard_present"
+fi
+
 # Test 2: File path appended as a file_edit event
 setup_test
 LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "edit-track")

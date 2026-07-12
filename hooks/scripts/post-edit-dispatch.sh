@@ -21,9 +21,17 @@ file_path=$(normalize_path "$file_path")
 [ -z "$file_path" ] && { printf '{}'; exit 0; }
 
 # Track the edit — flag r (repo-internal, not gitignored) or x (external/ignored)
-# (plan files in ~/.claude/plans/, external memory files, etc. can't be committed)
+# (plan files in ~/.claude/plans/, external memory files, etc. can't be committed).
+# BOTH sides normalized before the prefix compare (calibration ledger case #1):
+# payloads carry Windows mixed-form paths (C:/...) while a NO-GIT project's
+# PROJECT_DIR resolves via `pwd` in MSYS form (/c/...) — the raw compare never
+# matched, silently x-flagging every edit in git-less repos (Gate 1, nudges,
+# and health attribution all dead there). Git repos were immune only because
+# rev-parse happens to emit the mixed form.
 flag="x"
-if [[ "$file_path" == "${PROJECT_DIR}"* ]]; then
+np_file=$(normalize_path "$file_path")
+np_proj=$(normalize_path "$PROJECT_DIR")
+if [[ "$np_file" == "${np_proj}"* ]]; then
   flag="r"
   if git -C "${PROJECT_DIR}" check-ignore -q "$file_path" 2>/dev/null; then
     flag="x"
