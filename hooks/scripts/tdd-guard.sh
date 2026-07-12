@@ -54,19 +54,17 @@ if [ -n "$test_files" ]; then
   exit 0
 fi
 
-# No test files this session — enforce based on profile. Locked D5:
-# standard/minimal are unverifiable (no way to confirm the "right" test was
-# written, only that *a* test file was touched) so they demote to a
-# once-per-session reminder; strict keeps today's deny on EVERY unprotected
-# src edit (strict users opted into the friction).
-profile=$(eio_get_profile)
-case "$profile" in
-  strict)
-    msg=$(escape_for_json "TDD enforcement: no test file created/edited this session. Write a failing test before editing production code.")
-    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"},"systemMessage":"%s"}' "$msg"
+# No test files this session — LAB-only reminder (T6 emitter census: the
+# advisory TDD nudge is treatment; "strict"'s deny retired with the profile
+# name — the plugin's protection tier is the blocking gates, not TDD
+# enforcement). Locked D5 rationale stands: test-writing can't be verified
+# for correctness, only for existence, so this never blocks.
+case "$(eio_get_profile)" in
+  core)
+    printf '{}'
     ;;
   *)
-    # standard or minimal — once-per-session reminder: fires only when the
+    # lab — once-per-session reminder: fires only when the
     # log has ZERO prior /src/ production file_edit events (i.e. THIS edit
     # is the session's first). pre-dispatch runs before post-edit-dispatch
     # appends the current edit's own event, so the log at check time reflects

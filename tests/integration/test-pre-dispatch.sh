@@ -129,7 +129,9 @@ json=$(mock_json "tool_name=Write" "session_id=pd-test" \
 result=$(run_pre_dispatch "$json")
 assert_eq "tdd_guard_silent_with_test_file_event" "{}" "$result"
 
-# Test 12: TDD guard denies in strict profile
+# Test 12: the strict DENY is RETIRED (calibration T6 — "strict" aliases to
+# lab; the deny escalation died with the name): a legacy strict profile now
+# gets the once-per-session lab reminder, never a deny.
 setup_test
 create_event_log "$_TEST_TMPDIR/.claude" "pd-test" > /dev/null
 json=$(mock_json "tool_name=Write" "session_id=pd-test" \
@@ -138,8 +140,8 @@ json=$(mock_json "tool_name=Write" "session_id=pd-test" \
 export CORTEX_PROFILE=strict
 result=$(run_pre_dispatch "$json")
 unset CORTEX_PROFILE
-assert_contains "tdd_guard_denies_strict_profile" "$result" "deny"
-assert_contains "tdd_guard_denies_strict_profile_message" "$result" "TDD enforcement"
+assert_not_contains "tdd_guard_strict_deny_retired" "$result" "deny"
+assert_contains "tdd_guard_strict_gets_lab_reminder" "$result" "TDD guard"
 
 # Test 13: TDD guard skips test files themselves (never block writing tests)
 setup_test
@@ -168,9 +170,8 @@ json=$(mock_json "tool_name=Write" "session_id=pd-test" \
 result=$(run_pre_dispatch "$json")
 assert_eq "tdd_guard_skips_non_src_paths" "{}" "$result"
 
-# Test 15b: TDD guard now reminds under the minimal profile too (previously
-# fully silent — locked D5: standard/minimal both get a once-per-session
-# reminder now, only strict keeps deny).
+# Test 15b: under CORE (legacy "minimal" aliases to it) the TDD reminder is
+# fully silent — advisory nudges are treatment (T6 emitter census).
 setup_test
 create_event_log "$_TEST_TMPDIR/.claude" "pd-test" > /dev/null
 json=$(mock_json "tool_name=Write" "session_id=pd-test" \
@@ -179,7 +180,7 @@ json=$(mock_json "tool_name=Write" "session_id=pd-test" \
 export CORTEX_PROFILE=minimal
 result=$(run_pre_dispatch "$json")
 unset CORTEX_PROFILE
-assert_contains "tdd_guard_minimal_now_reminds" "$result" "TDD guard"
+assert_eq "tdd_guard_core_fully_silent" "{}" "$result"
 
 # Test 15c: TDD guard reminder fires ONCE per session — a second
 # production-src edit in a session that already has a prior r-flagged /src/
@@ -195,9 +196,8 @@ json=$(mock_json "tool_name=Write" "session_id=pd-test" \
 result=$(run_pre_dispatch "$json")
 assert_eq "tdd_guard_reminder_fires_once_per_session" "{}" "$result"
 
-# Test 15d: TDD guard STRICT profile denies on EVERY unprotected src edit,
-# not just the first (locked decision — strict users opted into friction;
-# only standard/minimal get the once-per-session reminder treatment).
+# Test 15d: a legacy strict profile follows lab's once-per-session semantics
+# — a SECOND unprotected src edit is silent (the every-edit deny is retired).
 setup_test
 create_event_log "$_TEST_TMPDIR/.claude" "pd-test" \
   "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/foo.ts" > /dev/null
@@ -207,7 +207,7 @@ json=$(mock_json "tool_name=Write" "session_id=pd-test" \
 export CORTEX_PROFILE=strict
 result=$(run_pre_dispatch "$json")
 unset CORTEX_PROFILE
-assert_contains "tdd_guard_strict_denies_every_edit" "$result" "deny"
+assert_eq "tdd_guard_strict_second_edit_silent" "{}" "$result"
 
 # Test 16: Missing event log (session_id present, no log file on disk) still
 # routes to sub-handlers — routing is the dispatcher's job regardless of state.

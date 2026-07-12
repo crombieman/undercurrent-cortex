@@ -19,8 +19,11 @@ cat > /dev/null 2>&1 || true
 
 # Opt-in gate (spec §4.3): un-opted repos are fully inert. Directory
 # existence is NOT the signal — only the explicit sentinel file, written by
-# /cortex:setup or session-start's grandfathering check.
+# /cortex:setup.
 [ -f "$(_eio_cortex_dir)/enabled" ] || { printf '{}'; exit 0; }
+
+# LAB-only (T6 emitter census): drift warnings are advisory treatment.
+[ "$(eio_get_profile)" = "lab" ] || { printf '{}'; exit 0; }
 
 PROJECT="$(_eio_project_dir)"
 

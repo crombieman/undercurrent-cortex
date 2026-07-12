@@ -31,8 +31,10 @@ if [[ "$file_path" == "${PROJECT_DIR}"* ]]; then
 fi
 append_event "file_edit" "${flag} ${file_path}"
 
-# Re-edit spiral detection (skip plugin infrastructure paths)
-if ! echo "$file_path" | grep -qE '\.claude-plugin/|\.claude/'; then
+# Re-edit spiral detection (skip plugin infrastructure paths) — LAB-only
+# (T6 emitter census): an advisory warning is adaptive treatment; recording
+# (the file_edit append above) runs in both conditions.
+if [ "$(eio_get_profile)" = "lab" ] && ! echo "$file_path" | grep -qE '\.claude-plugin/|\.claude/'; then
   files_modified=$(list_events "file_edit" | sed 's/^[rx] //')
   re_edit_count=0
   if [ -n "$files_modified" ]; then
@@ -78,11 +80,16 @@ fi
 shopt -u nocasematch
 
 # Commit cadence nudge (dynamic threshold from feedback loop, overridable via
-# per-project config — spec §7.1). commit_nudge_threshold config wins over the
-# feedback-derived threshold_set event when set to a genuine integer;
-# non-numeric config values are ignored (fall back to current behavior).
-# Race-safe derivation (Codex plan-review C-2): duplicate commit events from
-# async double-observation never move the anchor past newer edits.
+# per-project config — spec §7.1) — LAB-only (T6 emitter census: nudges are
+# treatment). commit_nudge_threshold config wins over the feedback-derived
+# threshold_set event when set to a genuine integer; non-numeric config
+# values are ignored. Race-safe derivation (Codex plan-review C-2): duplicate
+# commit events from async double-observation never move the anchor past
+# newer edits.
+if [ "$(eio_get_profile)" != "lab" ]; then
+  printf '{}'
+  exit 0
+fi
 edits=$(eio_edits_since_last_commit)
 threshold=$(last_event "threshold_set")
 threshold="${threshold:-15}"

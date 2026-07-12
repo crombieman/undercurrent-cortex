@@ -18,6 +18,10 @@ INPUT=$(cat)
 # /cortex:setup.
 [ -f "$(_eio_cortex_dir)/enabled" ] || { printf '{}'; exit 0; }
 
+# Condition (T6): resolved once — add_reminder() and the codex-reminder gate
+# below are LAB-only; blocking gates run in both conditions.
+STOP_GATE_CONDITION=$(eio_get_profile)
+
 # Resolve session-scoped event log from session_id in hook JSON
 resolve_event_log "$INPUT"
 
@@ -66,6 +70,10 @@ add_failure() {
 # symmetry with add_failure but isn't otherwise tracked — reminders never
 # feed the stop_blocked event value (blocked_gates stays failure-only).
 add_reminder() {
+  # LAB-only (T6 emitter census): reminders are advisory treatment — under
+  # the core condition this accumulator is a no-op, while blocking gates
+  # (add_failure) keep their teeth in BOTH conditions (protection tier).
+  [ "$STOP_GATE_CONDITION" = "lab" ] || return 0
   reminders="${reminders}- ${2}\n"
 }
 
@@ -193,14 +201,9 @@ if [ "$commits_count_g6" -gt 0 ]; then
   if [ "$has_fix_commit" = true ]; then
     root_cause_documented=$(count_events root_cause_logged)
     if [ "$root_cause_documented" -eq 0 ]; then
-      profile=$(eio_get_profile)
-      case "$profile" in
-        minimal) ;; # no enforcement
-        *)
-          lessons_file=$(eio_config_get lessons_file "tasks/lessons.md")
-          add_reminder "root_cause" "Root cause not documented after fix: commit. Update ${lessons_file} with pattern + prevention rule."
-          ;;
-      esac
+      # add_reminder is itself LAB-only (T6) — no separate profile case needed.
+      lessons_file=$(eio_config_get lessons_file "tasks/lessons.md")
+      add_reminder "root_cause" "Root cause not documented after fix: commit. Update ${lessons_file} with pattern + prevention rule."
     fi
   fi
 fi
@@ -215,7 +218,8 @@ r_distinct=$(list_events file_edit | grep '^r ' | sed 's/^r //' | sort -u | wc -
 r_distinct="${r_distinct:-0}"
 plan_mode_count_cx=$(count_events plan_mode)
 codex_review_count=$(count_events codex_review)
-if { [ "$plan_mode_count_cx" -gt 0 ] || [ "$r_distinct" -ge 4 ]; } && [ "$codex_review_count" -eq 0 ]; then
+if [ "$STOP_GATE_CONDITION" = "lab" ] \
+   && { [ "$plan_mode_count_cx" -gt 0 ] || [ "$r_distinct" -ge 4 ]; } && [ "$codex_review_count" -eq 0 ]; then
   add_reminder "codex_review" "Codex review not dispatched this session. Review is pre-authorized - dispatch without asking. Two steps: dispatch via the codex rescue agent, then harvest via the companion's status/result commands in the main conversation."
   if [ "$(count_events intervention codex_reminder)" -eq 0 ]; then
     append_event "intervention" "codex_reminder"

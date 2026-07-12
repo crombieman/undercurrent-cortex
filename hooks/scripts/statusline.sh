@@ -117,11 +117,17 @@ if [ -n "$ir" ]; then
 fi
 
 # --- Output ---
+# Line 1 (session receipts — pure event-log data) renders in BOTH conditions.
+# Lines 2-3 (health pulse, lessons/mutations, interventions) are the adaptive
+# tier's display — LAB-only (T6): the core condition shows receipts, not the
+# organism.
 if [ "$SESSION_DATA_AVAILABLE" = true ]; then
   printf '✏️  %s edits · 📦 %s commits · 🧪%s · 📄%s\n' "$edits" "$commits" "$tests_icon" "$docs_icon"
 else
   printf '✏️  session data unavailable (no session id)\n'
 fi
-printf '%s %s │ 🧠 %s absorbed │ 🧬 %s mutations queued │ %s\n' "$heart" "$status" "$lessons" "$proposals" "$trend_segment"
-[ -n "$intervention_line" ] && printf '%s\n' "$intervention_line"
+if [ "$(eio_get_profile)" = "lab" ]; then
+  printf '%s %s │ 🧠 %s absorbed │ 🧬 %s mutations queued │ %s\n' "$heart" "$status" "$lessons" "$proposals" "$trend_segment"
+  [ -n "$intervention_line" ] && printf '%s\n' "$intervention_line"
+fi
 exit 0

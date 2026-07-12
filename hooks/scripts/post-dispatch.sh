@@ -48,8 +48,10 @@ if [ -n "$EVENT_LOG" ] && [ -f "$EVENT_LOG" ]; then
     is_journal_edit=true
   fi
 
-  # Mid-session checkpoint every 25 tool uses since the last journal entry
-  if [ "$is_journal_edit" = false ]; then
+  # Mid-session checkpoint every 25 tool uses since the last journal entry —
+  # LAB-only (T6 emitter census: nudges are treatment; the tool_call append
+  # above is recording and runs in both conditions)
+  if [ "$is_journal_edit" = false ] && [ "$(eio_get_profile)" = "lab" ]; then
     uses=$(count_events tool_call '' journal_edit)
     if [ "$uses" -gt 0 ] && [ $((uses % 25)) -eq 0 ]; then
       # Record the fire for follow-through scoring (spec §6.3): followed iff a

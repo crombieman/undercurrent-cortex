@@ -112,8 +112,10 @@ if [ -n "$EVENT_LOG" ] && [ -f "$EVENT_LOG" ]; then
 fi
 
 # --- Conventional commit check + context prompt (only when a NEW commit was
-# observed this call; the newest new commit's subject is the one checked) ---
-if [ "$new_seen" = true ]; then
+# observed this call; the newest new commit's subject is the one checked).
+# LAB-only (T6 emitter census): the prompt is advisory treatment — the commit
+# EVENTS and journal lines above are recording and run in both conditions. ---
+if [ "$new_seen" = true ] && [ "$(eio_get_profile)" = "lab" ]; then
   source "$SCRIPT_DIR/lib/escape-json.sh" || true
   context_prompt="📝 Commit logged. Add a 1-line context note to the journal: what problem did this solve, or what state was the system left in?"
   if [ -n "$newest_new_subject" ] \

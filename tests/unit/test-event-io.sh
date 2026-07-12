@@ -196,14 +196,17 @@ TDIR4=$(mktemp -d)
 CORTEX_PROJECT_DIR_OVERRIDE="$TDIR4"
 assert_eq "eio_project_dir_override" "$TDIR4" "$(eio_project_dir)"
 
+# T6 condition vocabulary: core|lab; legacy names alias; default is lab.
 mkdir -p "$TDIR4/.claude/cortex"
-assert_eq "profile_default_standard" "standard" "$(eio_get_profile)"
+assert_eq "profile_default_lab" "lab" "$(eio_get_profile)"
 printf 'strict\n' > "$TDIR4/.claude/cortex/profile.local"
-assert_eq "profile_from_file" "strict" "$(eio_get_profile)"
+assert_eq "profile_from_file_strict_aliases_lab" "lab" "$(eio_get_profile)"
+printf 'core\n' > "$TDIR4/.claude/cortex/profile.local"
+assert_eq "profile_from_file_core" "core" "$(eio_get_profile)"
 printf 'bogus\n' > "$TDIR4/.claude/cortex/profile.local"
-assert_eq "profile_invalid_falls_back" "standard" "$(eio_get_profile)"
+assert_eq "profile_invalid_falls_back_lab" "lab" "$(eio_get_profile)"
 CORTEX_PROFILE="minimal"
-assert_eq "profile_env_wins" "minimal" "$(eio_get_profile)"
+assert_eq "profile_env_wins_minimal_aliases_core" "core" "$(eio_get_profile)"
 unset CORTEX_PROFILE
 unset CORTEX_PROJECT_DIR_OVERRIDE
 

@@ -25,6 +25,12 @@ INPUT=$(cat)
 # /cortex:setup.
 [ -f "$(_eio_cortex_dir)/enabled" ] || { printf '{}'; exit 0; }
 
+# Condition gate (T6 emitter census): EVERYTHING this hook does — keyword
+# context injection, decision detection, cautious-mode messaging, mid-session
+# sensory, wrap-up reminders — is adaptive treatment, and its only event
+# appends are `intervention cautious_mode` (also treatment). Core: fully inert.
+[ "$(eio_get_profile)" = "lab" ] || { printf '{}'; exit 0; }
+
 resolve_event_log "$INPUT"
 # Field-name compat: the platform docs name this field "prompt"; older
 # payloads (and this repo's fixtures) use "user_prompt". The wave-0 schema

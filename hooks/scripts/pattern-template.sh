@@ -12,6 +12,9 @@ source "$SCRIPT_DIR/lib/escape-json.sh" || { printf '{}'; exit 0; }
 
 PROJECT_DIR="$(eio_project_dir)"
 
+# LAB-only (T6 emitter census): template suggestions are advisory treatment.
+[ "$(eio_get_profile)" = "lab" ] || { printf '{}'; exit 0; }
+
 # Read stdin JSON, extract file path
 file_path=$(cat | extract_json_field "tool_input.file_path")
 file_path=$(echo "$file_path" | sed 's|\\|/|g')

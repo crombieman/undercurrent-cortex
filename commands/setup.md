@@ -55,16 +55,16 @@ Run: `bash "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/statusline.sh"`
 - If it produces nothing and step 0 just created the sentinel: expected — the statusline has no session data until the next session starts. Report that.
 - If it fails outright: warn — "Statusline unavailable. Verify the plugin is installed (`claude plugins list`) and start a new session."
 
-### 5. Display profile
+### 5. Display condition
 
-Check the current Cortex profile and explain:
+Check the current Cortex condition and explain:
 - Read `CORTEX_PROFILE` env var or `.claude/cortex/profile.local`
-- Display current profile (default: `standard`)
-- Explain options:
-  - **minimal** — Enforcement only. Blocks dangerous operations. Suppresses advisory warnings.
-  - **standard** — Full organism. Enforcement + learning + context injection + adaptive behavior.
-  - **strict** — All features plus: planning reminders, TDD enforcement blocks (not just warns), extra validation gates.
-- To change: `export CORTEX_PROFILE=strict` or write profile name to `.claude/cortex/profile.local`
+- Display current condition (default: `lab`)
+- Explain the two conditions (calibration wave — these back the Core/Lab experiment):
+  - **core** — Control: event recording, carry-over, and blocking protection gates ONLY. Zero adaptive output — no nudges, warnings, context injection, health display, or synthesis instructions.
+  - **lab** — Core plus the frozen adaptive tier: synthesis tasks, health pulse, interventions (commit nudge, re-edit warning, journal checkpoint, codex reminder), keyword context injection, sensory scan.
+  - Legacy names alias: `minimal`→core, `standard`/`strict`→lab (strict's TDD deny is retired).
+- To change: `export CORTEX_PROFILE=core` or write the condition name to `.claude/cortex/profile.local`
 
 ### 6. Print summary
 

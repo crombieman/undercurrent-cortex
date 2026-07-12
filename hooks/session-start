@@ -79,8 +79,10 @@ EVENT_LOG="$(_eio_week_dir)/${HOOK_SESSION_ID}.events.log"
 # No-clobber: never truncate an existing log (a resumed session with the same id
 # keeps its prior events). Only create — and seed the session_start anchor — when
 # the file does not yet exist. Degraded mode (write fails) must not abort the hook.
+EVENT_LOG_CREATED=false
 if [ ! -f "$EVENT_LOG" ]; then
   printf '%s|session_start|%s %s\n' "$(date +%s)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "unknown" > "$EVENT_LOG" 2>/dev/null || true
+  [ -f "$EVENT_LOG" ] && EVENT_LOG_CREATED=true
 fi
 
 # (current-session.id is DELETED — calibration wave T5, queue item 6: a
@@ -91,8 +93,20 @@ fi
 # by the session-end skill and /cortex:status. No sid ⇒ surfaces degrade to
 # "unavailable" — never a guess.)
 
-# Profile drives proposals/social/sensory/feedback gating below.
+# Condition drives every adaptive-tier gate below (calibration wave T6,
+# queue item 9): "core" = control (record / carry-over / blocking gates
+# ONLY), "lab" = core + the frozen adaptive tier. eio_get_profile maps the
+# legacy profile names.
 PROFILE=$(eio_get_profile)
+
+# --- Provenance stamp (T6; vocabulary addition, docs/state-files.md §3.3):
+# one per log, appended at creation — condition, plugin version, repo, host.
+# Model/harness version are NOT in the hook payload; the experiment protocol
+# assigns those fields to the per-session journal header (split schema).
+if [ "${EVENT_LOG_CREATED:-false}" = true ]; then
+  _plugin_version=$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "${PLUGIN_ROOT}/.claude-plugin/plugin.json" 2>/dev/null | head -1) || true
+  append_event "provenance" "condition=${PROFILE} plugin=${_plugin_version:-unknown} repo=$(basename "$(eio_project_dir)") host=$(uname -s 2>/dev/null || echo unknown)"
+fi
 
 # --- Step 0b: Housekeeping (calibration wave, queue item 7: the healer is
 # DELETED — instrument-defect verdict, it never repaired damage it or its
@@ -212,22 +226,35 @@ else
   append_event "carry_over_age" "0"
 fi
 
-# --- Step 1b: Synthesis automation (mechanical tasks) ---
-# Promotion sweep + staleness check run in synthesis-automation.sh.
-# Applied tracking + duplicate detection remain Claude's job (require judgment).
+# --- Step 1b: Synthesis automation (LAB-only — the adaptive tier IS the
+# treatment; a core boot must not read or rewrite collaboration.md) ---
 COLLAB_FILE="${HOME}/.cortex/synthesis/collaboration.md"
 synthesis_actions=""
-if [ -f "$COLLAB_FILE" ]; then
+if [ "$PROFILE" = "lab" ] && [ -f "$COLLAB_FILE" ]; then
   export COLLAB_FILE
   synthesis_actions=$("$SCRIPT_DIR/scripts/synthesis-automation.sh" 2>/dev/null || echo "")
 fi
 
 # --- Step 3: Compact session-start pulse (context diet, spec §10/R6) ---
-# v4.0: the full SKILL.md body (6.5 KB) is no longer injected wholesale every
-# boot. The pulse below (~0.9 KB) keeps the actionable steps; per-session DATA
-# blocks (statusline, synthesis directive, carry-over, sensory, reports) are
-# unaffected. Full protocol is one skill invocation away.
-skill_content="Session id: ${HOOK_SESSION_ID} — when a skill needs to write session events (session-end ritual, carry_addressed), pass this EXACT id as the argument; if it is no longer in context, SKIP the write and say so — never guess a session id.
+# Condition-split (T6, Codex plan-review C-1/audit finding 4): the CORE pulse
+# carries an explicit condition line and NO collaboration/synthesis
+# instructions — even a manually invoked skill is told to skip them. Ambient
+# memory (MEMORY.md, journal, lessons.md) stays in BOTH conditions: Core
+# isolates the plugin's adaptive machinery, not the maintainer's memory
+# (four-memory confound, documented limitation).
+if [ "$PROFILE" = "core" ]; then
+  skill_content="Session id: ${HOOK_SESSION_ID} — when a skill needs to write session events (session-end ritual, carry_addressed), pass this EXACT id as the argument; if it is no longer in context, SKIP the write and say so — never guess a session id.
+
+Condition: core — control condition. The adaptive tier is OFF this session: do NOT read ~/.cortex/synthesis/ files, run synthesis tasks, or apply collaboration patterns, even if a skill instructs it.
+
+## Session-start protocol (core)
+1. Read MEMORY.md, then read-or-create memory/$(date +%Y-%m-%d).md; write any carry-over surfaced below into it as the first entry.
+2. Display the statusline line above verbatim, plus a model-metadata line: 🤖 {model} · ⚡ {effort} · 🪟 {context window}.
+3. Non-trivial task: scan tasks/lessons.md by domain. Touching architecture/schema/pipeline: check documentation.md staleness first."
+else
+  skill_content="Session id: ${HOOK_SESSION_ID} — when a skill needs to write session events (session-end ritual, carry_addressed), pass this EXACT id as the argument; if it is no longer in context, SKIP the write and say so — never guess a session id.
+
+Condition: lab
 
 ## Session-start protocol (compact pulse — full protocol: /cortex:session-start)
 1. Read MEMORY.md, then read-or-create memory/$(date +%Y-%m-%d).md; write any carry-over surfaced below into it as the first entry. If a missed session-end warning appears below, run /cortex:session-end retrospectively first.
@@ -236,6 +263,7 @@ skill_content="Session id: ${HOOK_SESSION_ID} — when a skill needs to write se
 4. Non-trivial task: scan tasks/lessons.md by domain and log surfaced lesson IDs (L-YYYYMMDD-nn) to the journal. Touching architecture/schema/pipeline: check documentation.md staleness first.
 5. Housekeeping (after greeting, non-blocking): archive previous-month journals with no open [carry-over]; clean .claude/cortex .tmp files.
 When in doubt, invoke /cortex:session-start for the full skill."
+fi
 
 yesterday=$(date -d "yesterday" +%Y-%m-%d 2>/dev/null \
   || date -v-1d +%Y-%m-%d 2>/dev/null || echo "")
@@ -262,7 +290,7 @@ fb_mode="normal"
 fb_reason="boot"
 fb_commit_threshold=15
 
-if [ "$PROFILE" != "minimal" ] && [ -f "$HEALTH_FILE" ]; then
+if [ "$PROFILE" = "lab" ] && [ -f "$HEALTH_FILE" ]; then
   ht_result=$(ht_trend "$HEALTH_FILE")
   IFS='|' read -r _ht_total _ht_nonidle ht_verdict ht_reason <<< "$ht_result"
   if [ "$ht_verdict" = "degrading" ]; then
@@ -270,7 +298,8 @@ if [ "$PROFILE" != "minimal" ] && [ -f "$HEALTH_FILE" ]; then
     fb_reason="$ht_reason"
   fi
 fi
-
+# Core: mode_set stays appended (derivation stability for readers) but is
+# always "normal boot" — cautious-mode is treatment.
 append_event "mode_set" "$fb_mode $fb_reason"
 append_event "threshold_set" "$fb_commit_threshold"
 
@@ -280,62 +309,17 @@ if [ -f "$SCRIPT_DIR/scripts/statusline.sh" ]; then
   statusline_output=$("$SCRIPT_DIR/scripts/statusline.sh" "$HOOK_INPUT" 2>/dev/null || echo "")
 fi
 
-# --- Step 5: Proposal surfacing (strict profile only) ---
+# --- Step 5: Proposal surfacing — RETIRED with the "strict" profile name
+# (T6): proposal review is a maintainer act, not treatment. The pending
+# queue rides in proposals.local.md until post-verdict, reviewed via
+# /analyze-session; the surfaced_count rewrite went with it (one less
+# document writer at boot).
 proposal_summary=""
-if [ "$PROFILE" = "strict" ] && [ -f "$PROPOSALS_FILE" ]; then
-  pending_count=0
-  if grep -q '^status=pending' "$PROPOSALS_FILE" 2>/dev/null; then
-    pending_count=$(grep -c '^status=pending' "$PROPOSALS_FILE" 2>/dev/null)
-  fi
-  if [ "$pending_count" -gt 0 ]; then
-    # Find oldest pending proposal date (id=YYYYMMDD-... comes before status=pending)
-    oldest_date=""
-    last_id=""
-    while IFS= read -r line; do
-      case "$line" in
-        id=*) last_id=$(echo "$line" | sed 's/^id=\([0-9]\{8\}\).*/\1/') ;;
-        status=pending)
-          if [ -n "$last_id" ]; then
-            if [ -z "$oldest_date" ] || [ "$last_id" \< "$oldest_date" ]; then
-              oldest_date="$last_id"
-            fi
-          fi
-          ;;
-      esac
-    done < "$PROPOSALS_FILE"
 
-    age_info=""
-    if [ -n "$oldest_date" ]; then
-      oldest_fmt="${oldest_date:0:4}-${oldest_date:4:2}-${oldest_date:6:2}"
-      oldest_epoch=$(date -d "$oldest_fmt" +%s 2>/dev/null || echo "0")
-      if [ "$oldest_epoch" -gt 0 ]; then
-        now_epoch=$(date +%s)
-        age_days=$(( (now_epoch - oldest_epoch) / 86400 ))
-        age_info=" (oldest: ${age_days}d)"
-      fi
-    fi
-
-    proposal_summary=$'\n'"${pending_count} pending evolution proposal(s)${age_info}. Review with /analyze-session or say 'approve proposal'/'reject proposal'."
-
-    # Increment surfaced_count for all pending proposals
-    awk '
-      /^status=pending/ { pending=1 }
-      /^surfaced_count=/ && pending {
-        val = substr($0, index($0,"=")+1) + 1
-        print "surfaced_count=" val
-        pending = 0
-        next
-      }
-      /^---/ { pending=0 }
-      { print }
-    ' "$PROPOSALS_FILE" > "$PROPOSALS_FILE.tmp.$$" && mv "$PROPOSALS_FILE.tmp.$$" "$PROPOSALS_FILE"
-  fi
-fi
-
-# --- Step 5b: Social System — cross-session patterns ---
+# --- Step 5b: Social System — cross-session patterns (LAB-only) ---
 social_warnings=""
 
-if [ "$PROFILE" != "minimal" ] && [ -f "$HEALTH_FILE" ]; then
+if [ "$PROFILE" = "lab" ] && [ -f "$HEALTH_FILE" ]; then
   # Get last 5 data rows (skip headers/metadata). `|| true`: the grep -v chain
   # empties out (exit 1) on a header-only file; pipefail would otherwise abort.
   social_data=$(grep -v '^#' "$HEALTH_FILE" 2>/dev/null | grep -v '^$' | grep -v '^trend_' | grep -v '^avg_' | grep -v '^---' | grep '|' | tail -5 || true)
@@ -378,18 +362,20 @@ if [ "$PROFILE" != "minimal" ] && [ -f "$HEALTH_FILE" ]; then
 fi
 
 # Recurring file edits — derived at read from the week-bucket logs (wave 5,
-# locked D6: the mutable cross-session.local.md tracker is retired; a legacy
-# file on disk is inert — no reader, no writer).
-# Protocol is count|path (count first): the path is everything after the
-# FIRST pipe — paths may themselves contain pipes (W5 review I-3).
-hot_files=$(eio_hot_files 30 4 | awk '{ i = index($0, "|"); if (i == 0) next; printf "  - %s (%s sessions)\n", substr($0, i + 1), substr($0, 1, i - 1) }')
-if [ -n "$hot_files" ]; then
-  social_warnings="${social_warnings}Frequently edited files (4+ sessions):"$'\n'"${hot_files}"$'\n'"Consider if these need a deeper refactor."$'\n'
+# locked D6). LAB-only (T6): cross-session adaptive display is treatment —
+# it previously rode OUTSIDE the profile gate, which the emitter census
+# caught. Protocol is count|path (count first): the path is everything after
+# the FIRST pipe — paths may themselves contain pipes (W5 review I-3).
+if [ "$PROFILE" = "lab" ]; then
+  hot_files=$(eio_hot_files 30 4 | awk '{ i = index($0, "|"); if (i == 0) next; printf "  - %s (%s sessions)\n", substr($0, i + 1), substr($0, 1, i - 1) }')
+  if [ -n "$hot_files" ]; then
+    social_warnings="${social_warnings}Frequently edited files (4+ sessions):"$'\n'"${hot_files}"$'\n'"Consider if these need a deeper refactor."$'\n'
+  fi
 fi
 
-# --- Step 5c: Sensory System — external awareness ---
+# --- Step 5c: Sensory System — external awareness (LAB-only) ---
 sensory_output=""
-if [ "$PROFILE" != "minimal" ] && [ -x "$SCRIPT_DIR/scripts/sensory-check.sh" ]; then
+if [ "$PROFILE" = "lab" ] && [ -x "$SCRIPT_DIR/scripts/sensory-check.sh" ]; then
   # Pass HOOK_INPUT so sensory-check resolves its write-log from session_id
   # (full-scan signature: sensory-check.sh [--mid-session] [hook_json]).
   sensory_output=$("$SCRIPT_DIR/scripts/sensory-check.sh" "$HOOK_INPUT" 2>/dev/null || echo "")
@@ -403,7 +389,7 @@ fi
 # surfaced as retirement candidates (user decides — never auto-retired).
 intervention_report_msg=""
 _prior_log_count=${#_scanned_logs[@]}
-if [ "$_prior_log_count" -gt 0 ] && [ $((_prior_log_count % 10)) -eq 0 ]; then
+if [ "$PROFILE" = "lab" ] && [ "$_prior_log_count" -gt 0 ] && [ $((_prior_log_count % 10)) -eq 0 ]; then
   _ir=$(eio_intervention_report 2>/dev/null || true)
   if [ -n "$_ir" ]; then
     # WAVE-4 TUNABLE: retirement candidate = >=10 fires AND <20% follow-through

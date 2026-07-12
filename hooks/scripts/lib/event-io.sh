@@ -270,16 +270,23 @@ eio_proposals_file() {
 }
 
 # eio_get_profile
-# Returns the active Cortex profile: minimal, standard (default), or strict.
-# Resolution: CORTEX_PROFILE env → $(_eio_cortex_dir)/profile.local first line → "standard".
+# Returns the active Cortex CONDITION: "core" or "lab" (calibration wave T6,
+# queue item 9). core = the experiment's control: record / carry-over /
+# blocking gates ONLY — zero adaptive emissions. lab = core + the frozen
+# adaptive tier (the treatment under test, pinned to the old "standard"
+# semantics; "strict"'s deny/proposal escalations retire with the name).
+# Legacy profile values alias: minimal→core, standard/strict→lab.
+# Resolution: CORTEX_PROFILE env → $(_eio_cortex_dir)/profile.local first
+# line → "lab" (the lived default).
 eio_get_profile() {
   local profile="${CORTEX_PROFILE:-}"
   if [ -z "$profile" ] && [ -f "$(_eio_cortex_dir)/profile.local" ]; then
     profile=$(head -1 "$(_eio_cortex_dir)/profile.local" 2>/dev/null | tr -d '[:space:]')
   fi
   case "$profile" in
-    minimal|strict) echo "$profile" ;;
-    *) echo "standard" ;;
+    core|minimal) echo "core" ;;
+    lab|standard|strict) echo "lab" ;;
+    *) echo "lab" ;;
   esac
 }
 
