@@ -343,9 +343,12 @@ assert_eq "x_only_session_is_idle_no_row" "0" "$(count_health_rows "$health_file
 assert_contains "x_only_session_marks_health_written" \
   "$(list_events health_written "$LOG")" "idle-skipped"
 
-# --- Test 18: header strip — a pre-existing v3-style header (trend_direction=/
-# avg_*=/---) is idempotently removed on session-end, and stays gone on a
-# SECOND session-end (different sid — dedup would otherwise mask the check) ---
+# --- Test 18: APPEND-ONLY health file (calibration wave, queue item 7): the
+# v3 header-strip rewrite is DELETED with the healer — session-end performs
+# create-with-header + row append and NOTHING else. Pre-existing v3-era lines
+# (trend_direction=/avg_*=/---) SURVIVE untouched — every reader already
+# filters them, and with both rewriters gone the two-writer race class is
+# structurally over. ---
 setup_test
 health_file="$_TEST_TMPDIR/.claude/cortex/health.local.md"
 mkdir -p "$(dirname "$health_file")"
@@ -354,16 +357,17 @@ create_event_log "$_TEST_TMPDIR/.claude" "se-strip1" \
   "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/a.ts" > /dev/null
 make_journal "$_TEST_TMPDIR"
 run_session_end "se-strip1" > /dev/null
-assert_file_not_contains "header_strip_removes_trend" "$health_file" "trend_direction="
-assert_file_not_contains "header_strip_removes_avg" "$health_file" "avg_reasoning_misses="
-assert_file_not_contains "header_strip_removes_separator" "$health_file" "---"
-# Idempotence: a second session-end (new sid, avoids per-sid dedup) doesn't
-# choke on an already-clean file and the lines stay gone.
+assert_file_contains "append_only_v3_lines_survive" "$health_file" "trend_direction="
+assert_file_contains "append_only_avg_lines_survive" "$health_file" "avg_reasoning_misses="
+assert_file_contains "append_only_row_still_appended" "$health_file" "|se-strip1|"
+assert_file_contains "append_only_legacy_row_survives" "$health_file" "2026-06-01|0|1.0"
+# A second session-end (new sid, avoids per-sid dedup) appends its own row
+# and still mutates nothing else.
 create_event_log "$_TEST_TMPDIR/.claude" "se-strip2" \
   "1700000001|file_edit|r ${_TEST_TMPDIR}/src/lib/a.ts" > /dev/null
 run_session_end "se-strip2" > /dev/null
-assert_file_not_contains "header_strip_idempotent_trend" "$health_file" "trend_direction="
-assert_eq "header_strip_both_rows_survive" "3" "$(count_health_rows "$health_file")"
+assert_file_contains "append_only_second_run_v3_lines_survive" "$health_file" "trend_direction="
+assert_eq "append_only_all_rows_survive" "3" "$(count_health_rows "$health_file")"
 
 # --- Test 19: fix_ratio + reverts computed from REAL git log subjects since
 # session_start (real git sandbox — a mocked git can't exercise --since) ---

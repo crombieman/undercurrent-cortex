@@ -107,14 +107,14 @@ scan_for_rewrite_idioms() {
 
 # filter_rewrite_allowlist — drops hits matching the sanctioned (file, target)
 # pairs; whatever survives is a violation. Targets, all documents:
-#   validate-organism.sh    HEALTH_FILE rebuild/prune (§3.7; cross_file prune
-#                           REMOVED wave 5 — tracker retired per locked D6)
 #   state-io.sh             flat_health migration rewrite (dies in 4.2)
-#   session-end-dispatch.sh HEALTH_FILE header-strip (CROSS_FILE update
-#                           REMOVED wave 5 — hot files derive via eio_hot_files)
 #   session-start           PROPOSALS_FILE surfaced_count bump (boot, single writer)
 #   apply-proposal.sh       PROPOSALS_FILE status transitions (user command)
 #   synthesis-automation.sh COLLAB_FILE promotion sweep (boot, single writer)
+# REMOVED (calibration wave, queue item 7 — health.local.md is create-once +
+# append-only now; the lint FAILS if either rewrite pattern reappears):
+#   validate-organism.sh    healer deleted outright (instrument-defect verdict)
+#   session-end-dispatch.sh header-strip deleted (ends the two-writer race class)
 filter_rewrite_allowlist() {
   awk '
     {
@@ -122,9 +122,7 @@ filter_rewrite_allowlist() {
       sub(/:.*$/, "", file)      # strip first ":" onward (POSIX-style paths)
       sub(/.*\//, "", file)      # basename
       allowed = 0
-      if (file == "validate-organism.sh" && $0 ~ /HEALTH_FILE\.tmp\.\$\$/) allowed = 1
-      else if (file == "state-io.sh" && $0 ~ /flat_health\.tmp\.\$\$/) allowed = 1
-      else if (file == "session-end-dispatch.sh" && $0 ~ /HEALTH_FILE\.tmp\.\$\$/) allowed = 1
+      if (file == "state-io.sh" && $0 ~ /flat_health\.tmp\.\$\$/) allowed = 1
       else if (file == "session-start" && $0 ~ /PROPOSALS_FILE\.tmp\.\$\$/) allowed = 1
       else if (file == "apply-proposal.sh" && $0 ~ /PROPOSALS_FILE\.tmp\.\$\$/) allowed = 1
       else if (file == "synthesis-automation.sh" && $0 ~ /COLLAB_FILE[}]?\.tmp\.\$\$/) allowed = 1
@@ -150,19 +148,24 @@ printf 'awk "..." "$HEALTH_FILE" > "$HEALTH_FILE.tmp.$$" && mv "$HEALTH_FILE.tmp
 # clean: comment-only mention
 printf '# the old > file.tmp.$$ && mv idiom is banned; sed -i too\nok=1\n' > "$FIX3/clean-comment.sh"
 # clean: allowlisted construct in the allowlisted file name
+printf 'awk "..." "$PROPOSALS_FILE" > "$PROPOSALS_FILE.tmp.$$" && mv "$PROPOSALS_FILE.tmp.$$" "$PROPOSALS_FILE"\n' > "$FIX3/apply-proposal.sh"
+# planted violation: the RETIRED healer pattern must never come back — a
+# HEALTH_FILE rewrite is a violation in EVERY file now, including the old
+# allowlisted names (calibration wave, queue item 7)
 printf 'awk "..." "$HEALTH_FILE" > "$HEALTH_FILE.tmp.$$" && mv "$HEALTH_FILE.tmp.$$" "$HEALTH_FILE"\n' > "$FIX3/validate-organism.sh"
 # clean: sed WITHOUT -i (pattern arg, no in-place)
 printf 'sed "s/x/y/" "$F" > "$OUT"\n' > "$FIX3/clean-sed.sh"
 
 hits3=$(scan_for_rewrite_idioms "$FIX3"/*.sh | filter_rewrite_allowlist)
 hit_count3=$(printf '%s' "$hits3" | awk 'NF { c++ } END { print c + 0 }')
-assert_eq "w7_catches_planted_violations" "4" "$hit_count3"
+assert_eq "w7_catches_planted_violations" "5" "$hit_count3"
 assert_contains "w7_flags_eventlog_rewrite" "$hits3" "eventlog-rewrite.sh"
 assert_contains "w7_flags_sed_inplace" "$hits3" "sed-inplace.sh"
 assert_contains "w7_flags_sed_inplace_behind_flags" "$hits3" "sed-inplace-flags.sh"
 assert_contains "w7_flags_allowlisted_construct_in_new_file" "$hits3" "new-script.sh"
+assert_contains "w7_flags_retired_healer_rewrite" "$hits3" "validate-organism.sh"
 assert_not_contains "w7_skips_comment_mention" "$hits3" "clean-comment.sh"
-assert_not_contains "w7_skips_allowlisted_file_construct" "$hits3" "validate-organism.sh"
+assert_not_contains "w7_skips_allowlisted_file_construct" "$hits3" "apply-proposal.sh"
 assert_not_contains "w7_skips_sed_without_inplace" "$hits3" "clean-sed.sh"
 
 end_suite

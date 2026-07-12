@@ -36,13 +36,13 @@ fi
 [ -f "$(_eio_cortex_dir)/enabled" ] || { printf '{}'; exit 0; }
 
 # session-start is the SINGLE sanctioned exception still allowed to source
-# state-io.sh (legacy carry-over reader + cleanup_stale_state_files /
-# validate_organism, until Task 4.2 slims it). event-io.sh (sourced above) is
+# state-io.sh (legacy carry-over reader + cleanup_stale_state_files, until
+# Task 4.2 — this wave's T4 — deletes both). event-io.sh (sourced above) is
 # the write path: this hook is the SOLE creator of the per-session
 # append-only event log.
 source "$SCRIPT_DIR/scripts/lib/state-io.sh" || { printf '{}'; exit 0; }
 source "$SCRIPT_DIR/scripts/lib/escape-json.sh" || { printf '{}'; exit 0; }
-source "$SCRIPT_DIR/scripts/lib/validate-organism.sh" || true
+source "$SCRIPT_DIR/scripts/lib/housekeeping.sh" || true
 
 # Extract session_id from hook JSON (Claude Code provides this)
 HOOK_SESSION_ID=""
@@ -124,16 +124,13 @@ PROFILE=$(get_profile)
 # --- Step 0: Cleanup stale state files (>24 hours old) ---
 cleanup_stale_state_files
 
-# --- Step 0b: Organism self-repair ---
-repair_report=""
-if type validate_organism &>/dev/null; then
-  repair_result=$(validate_organism 2>/dev/null || echo "0|0|")
-  repair_issues=$(echo "$repair_result" | cut -d'|' -f1)
-  repair_fixes=$(echo "$repair_result" | cut -d'|' -f2)
-  repair_details=$(echo "$repair_result" | cut -d'|' -f3-)
-  if [ "${repair_issues:-0}" -gt 0 ]; then
-    repair_report="Organism self-repair: fixed ${repair_fixes} of ${repair_issues} issues (${repair_details})"
-  fi
+# --- Step 0b: Housekeeping (calibration wave, queue item 7: the healer is
+# DELETED — instrument-defect verdict, it never repaired damage it or its
+# sibling writer didn't cause. health.local.md is create-once + append-only
+# now. What survives is the hygiene with a clean record: temp/backup cleanup
+# + week-dir pruning, silent — no "self-repair" reporting.) ---
+if type cortex_housekeeping &>/dev/null; then
+  cortex_housekeeping 2>/dev/null || true
 fi
 
 # --- Step 0c: Cleanup leftover bootstrap-injected settings.json entries ---
@@ -509,7 +506,7 @@ Do NOT skip these. Do NOT defer. Complete before addressing user's message."
 fi
 
 # --- Output ---
-full_context="${statusline_output:+${statusline_output}$'\n\n'}${repair_report:+${repair_report}$'\n\n'}${synthesis_directive:+${synthesis_directive}$'\n\n'}${skill_content}${missed_close}${proposal_summary}${social_warnings:+$'\n\n'${social_warnings}}${intervention_report_msg:+$'\n\n'${intervention_report_msg}}${sensory_output:+$'\n\n'Sensory scan:$'\n'${sensory_output}}${carry_over_msg}"
+full_context="${statusline_output:+${statusline_output}$'\n\n'}${synthesis_directive:+${synthesis_directive}$'\n\n'}${skill_content}${missed_close}${proposal_summary}${social_warnings:+$'\n\n'${social_warnings}}${intervention_report_msg:+$'\n\n'${intervention_report_msg}}${sensory_output:+$'\n\n'Sensory scan:$'\n'${sensory_output}}${carry_over_msg}"
 escaped=$(escape_for_json "$full_context")
 context="<cortex-session-start>${escaped}</cortex-session-start>"
 

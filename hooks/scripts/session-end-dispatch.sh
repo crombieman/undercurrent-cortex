@@ -264,16 +264,11 @@ fi
 # --- Write to health file ---
 mkdir -p "$(dirname "$HEALTH_FILE")" 2>/dev/null || true
 
-# Header strip (spec §6.1): idempotently remove any trend_*/avg_*/--- lines
-# left behind by a pre-v4 (or otherwise stale) header. Those fields are now
-# computed at READ time (hooks/scripts/lib/health-trend.sh) — never stored.
-# Runs every session-end regardless of whether the lines are actually present
-# ("tolerate their reappearance": harmless no-op when already clean).
-# Deny-tolerant end to end: a failed strip must not abort the hook.
-if [ -f "$HEALTH_FILE" ]; then
-  { awk '!/^trend_/ && !/^avg_/ && !/^---$/' "$HEALTH_FILE" > "$HEALTH_FILE.tmp.$$" 2>/dev/null \
-    && mv "$HEALTH_FILE.tmp.$$" "$HEALTH_FILE"; } 2>/dev/null || true
-fi
+# The v3 header-strip rewrite is DELETED (calibration wave, queue item 7,
+# with the healer): health.local.md is create-once + append-only — the ONLY
+# writes anywhere are the header creation below and the row append. Legacy
+# trend_*/avg_*/--- lines on old files simply persist; every reader already
+# filters them. This ends the two-writer race class for good (lint-enforced).
 
 # Create file with header if it doesn't exist (v2: no trend_*/avg_*/---
 # metadata lines — those are read-time-only now). Deny-tolerant: creation
