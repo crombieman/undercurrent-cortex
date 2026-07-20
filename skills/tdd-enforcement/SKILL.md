@@ -39,6 +39,28 @@ This is a rigid methodology skill. Follow the phases exactly. Do not skip steps.
 - **REFACTOR means "no new behavior."** Only restructure, never add functionality.
 - **Commit at cycle end.** After a complete RED-GREEN-REFACTOR cycle, commit the work.
 
+## Phase 0 — Fixtures at Spec Time (upstream of RED)
+
+RED cases are cheapest to derive while the design reasoning is fresh, not when
+implementation starts. Two rules:
+
+1. **A spec ruling is not closed until it names the fixtures that would catch its
+   violation.** When a design decision, law, or fold is recorded in a spec/design
+   doc, record its concrete fixture list in the same entry — the exact input/state
+   and the exact wrong output the rule forbids ("aggregate view over an abstained
+   parent must render nothing"; "stored-status render must fail"; "single-score
+   similarity render must fail"). Same logic as capturing rationale in real time:
+   after the fact loses the nuance, and the violation cases ARE the nuance.
+2. **Harvest before you derive.** At implementation planning, sweep the spec's
+   recorded fixture lists into the test plan FIRST; only then derive additional
+   cases. The spec's fixtures encode the failure modes the design process actually
+   worried about — a fresh derivation from the code's shape will miss them.
+
+Evidence for the pattern: one design phase recorded fixture lists across ~15 fold
+batches at ruling time; the lists repeatedly named negative cases (must-fail
+renders, must-refuse merges, must-abstain queries) that a code-first test derivation
+has no reason to imagine.
+
 ## Enforcement
 
 A PreToolUse hook monitors edits to production code (`src/` files). If no test file has been created or edited this session, the hook intervenes:

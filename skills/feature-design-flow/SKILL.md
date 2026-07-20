@@ -31,6 +31,18 @@ If a product-identity skill is available (e.g., via a domain pack), invoke it to
 Brainstorm by listing 3-5 approaches, evaluating tradeoffs for each, and selecting the best fit. Write findings to the design doc.
 Design doc → `tasks/design-[feature-name].md` (canonical — see CLAUDE.md).
 
+**Parking discipline — the legal form of "later"**: deferring an idea, feature, or
+surfaced downside is legitimate ONLY when the parked entry carries all three:
+1. **Deferral-safety proof** — show that nothing being built now forecloses it
+   (later activation stays cheap; no schema/architecture decision blocks it).
+2. **Pinned revisit trigger** — a named, checkable condition ("when real usage
+   shows X", "at hosting rung 2", "on first request for Y"), never "someday".
+3. **A recorded home** — the parked item lives in the design doc's out-of-scope/
+   parked section with the proof and trigger attached, not in conversation memory.
+Deferral-as-shortcut fails this test; so does absorbing a downside as an accepted
+trade-off. Every surfaced downside gets engineered away or parked under these
+three conditions — parking without them is scope-loss, not sequencing.
+
 ## Phase 3 — Implementation plan
 Decompose the work into atomic waves with a commit checkpoint per wave. Each wave should be independently shippable.
 
