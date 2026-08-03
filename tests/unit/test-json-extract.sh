@@ -42,6 +42,11 @@ ORIGINAL_PATH="$PATH"
 mock_bin=$(setup_mock_path "$_TEST_TMPDIR")
 hide_command "$mock_bin" "jq"
 hide_command "$mock_bin" "python3"
+# python/py too: tier 2 now falls back python3 -> python -> py -3
+# (python-resolve.sh), so masking python3 alone would let a real python on
+# the box silently answer for tier 2 instead of reaching tier 3.
+hide_command "$mock_bin" "python"
+hide_command "$mock_bin" "py"
 PATH="$mock_bin:$PATH"
 
 load_extract
@@ -71,16 +76,23 @@ restore_path
 # save/restore bookkeeping.
 jq() { return 127; }
 python3() { return 127; }
-export -f jq python3
+# python/py too — see the tier-2 fallback chain note above.
+python() { return 127; }
+py() { return 127; }
+export -f jq python3 python py
 jq_masked=no; jq >/dev/null 2>&1 || jq_masked=yes
 py_masked=no; python3 >/dev/null 2>&1 || py_masked=yes
+plain_masked=no; python >/dev/null 2>&1 || plain_masked=yes
+launcher_masked=no; py >/dev/null 2>&1 || launcher_masked=yes
 assert_eq "tier3_pretty_jq_masked" "yes" "$jq_masked"
 assert_eq "tier3_pretty_python3_masked" "yes" "$py_masked"
+assert_eq "tier3_pretty_python_masked" "yes" "$plain_masked"
+assert_eq "tier3_pretty_py_launcher_masked" "yes" "$launcher_masked"
 
 load_extract
 result=$(printf '{\n  "tool_input": {\n    "file_path": "src/pretty.ts"\n  }\n}' | extract_json_field "tool_input.file_path")
 assert_eq "extract_tier3_pretty_nested" "src/pretty.ts" "$result"
-unset -f jq python3
+unset -f jq python3 python py
 
 ORIGINAL_PATH="$PATH"
 mock_bin=$(setup_mock_path "$_TEST_TMPDIR")

@@ -37,8 +37,11 @@ if [ -n "$HOOK_INPUT" ]; then
   if command -v jq >/dev/null 2>&1; then
     HOOK_SESSION_ID=$(echo "$HOOK_INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
   fi
-  if [ -z "$HOOK_SESSION_ID" ] && command -v python3 >/dev/null 2>&1; then
-    HOOK_SESSION_ID=$(echo "$HOOK_INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null || true)
+  if [ -z "$HOOK_SESSION_ID" ] && declare -F cortex_python3_run >/dev/null; then
+    # cortex_python3_run arrives via event-io.sh -> python-resolve.sh (sourced
+    # above with a hard-fail guard, so it is always defined here). Stub-aware:
+    # `command -v python3` false-positives on the Windows Store alias.
+    HOOK_SESSION_ID=$(echo "$HOOK_INPUT" | cortex_python3_run "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null || true)
   fi
   if [ -z "$HOOK_SESSION_ID" ]; then
     # POSIX-awk match() + first-line-first-match: tolerates pretty-printed

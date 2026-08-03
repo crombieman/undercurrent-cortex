@@ -136,6 +136,23 @@ MOCKEOF
   chmod +x "$mock_bin/gh"
 }
 
+# create_store_stub <mock_bin_dir> <command_name>
+# Simulates the Windows "App execution alias" Store stub: a real executable
+# on PATH that prints an install hint to stderr and exits 49 WITHOUT running
+# Python. `command -v` resolves it happily — PATH presence is not usability
+# (the trap python-resolve.sh exists to close). Logs invocations like the
+# other mocks so tests can prove the stub was probed and rejected.
+create_store_stub() {
+  local mock_bin="$1" cmd="$2"
+  cat > "$mock_bin/$cmd" << MOCKEOF
+#!/usr/bin/env bash
+echo "$cmd \$*" >> "$mock_bin/$cmd.calls"
+echo "Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases." >&2
+exit 49
+MOCKEOF
+  chmod +x "$mock_bin/$cmd"
+}
+
 # hide_command <mock_bin_dir> <command_name>
 # Creates a stub that exits 127 (simulates command not found).
 hide_command() {
