@@ -6,6 +6,12 @@
 # Usage: echo '{"tool_input":{"file_path":"src/test.ts"}}' | extract_json_field "tool_input.file_path"
 # Callers should apply Windows path normalization if needed: sed 's|\\\\|/|g'
 
+# Stub-aware Python resolution for tier 2 (optional accelerator — tier 3
+# stands alone regardless). python-resolve.sh is pure function definitions,
+# so lib-to-lib sourcing adds no side effects; `|| true` keeps errexit
+# callers alive if the file is absent (tier 2 then simply skips).
+source "$(dirname "${BASH_SOURCE[0]}")/python-resolve.sh" 2>/dev/null || true
+
 extract_json_field() {
   local field="$1"
   local input
@@ -23,10 +29,13 @@ extract_json_field() {
     fi
   fi
 
-  # Tier 2: python3 (supports nested via chained .get())
-  if command -v python3 >/dev/null 2>&1; then
+  # Tier 2: Python 3 (supports nested via chained .get()) — via the
+  # stub-aware resolver: `command -v python3` false-positives on the Windows
+  # Store alias (a stub that exits 49 without running Python), so usability
+  # is decided by executing candidates, never by PATH presence.
+  if declare -F cortex_python3_run >/dev/null; then
     local result
-    result=$(echo "$input" | python3 -c "
+    result=$(echo "$input" | cortex_python3_run "
 import sys, json, functools
 try:
     data = json.load(sys.stdin)
@@ -35,7 +44,7 @@ try:
     print(val if val != '' else '')
 except:
     print('')
-" "$field" 2>/dev/null)
+" "$field" 2>/dev/null) || result=""
     if [ -n "$result" ]; then
       echo "$result"
       return 0

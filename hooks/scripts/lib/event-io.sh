@@ -4,6 +4,11 @@
 # NEVER parse values with awk '{print $3}' — values may contain pipes.
 # Does NOT source state-io.sh (state-io runs v3.7 migration on source).
 
+# python-resolve.sh is pure function definitions (no side effects — unlike
+# the state-io case above), so sourcing it keeps _eio_extract_sid's tier 2
+# self-contained for every consumer. Stub-aware: see that file's header.
+source "$(dirname "${BASH_SOURCE[0]}")/python-resolve.sh" 2>/dev/null || true
+
 # --- Path derivation (self-contained; mirrors state-io without side effects) ---
 # Lazy (per-call, not source-time): tests override via CORTEX_PROJECT_DIR_OVERRIDE
 # after sourcing, and hooks may run before cwd is settled.
@@ -45,8 +50,11 @@ _eio_extract_sid() {
   if command -v jq >/dev/null 2>&1; then
     sid=$(printf '%s' "$json" | jq -r '.session_id // empty' 2>/dev/null || true)
   fi
-  if [ -z "$sid" ] && command -v python3 >/dev/null 2>&1; then
-    sid=$(printf '%s' "$json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null || true)
+  if [ -z "$sid" ] && declare -F cortex_python3_run >/dev/null; then
+    # Stub-aware resolver (python-resolve.sh): `command -v python3`
+    # false-positives on the Windows Store alias; usability is decided by
+    # executing candidates (python3 -> python -> py -3), never PATH presence.
+    sid=$(printf '%s' "$json" | cortex_python3_run "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null || true)
   fi
   if [ -z "$sid" ]; then
     # POSIX-awk match() + first-line-first-match: tolerates pretty-printed

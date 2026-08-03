@@ -319,6 +319,11 @@ TIER3_MOCK="$_TEST_TMPDIR/tier3-mock-bin"
 mkdir -p "$TIER3_MOCK"
 hide_command "$TIER3_MOCK" "jq"
 hide_command "$TIER3_MOCK" "python3"
+# python/py too: tier 2 now falls back python3 -> python -> py -3
+# (python-resolve.sh), so masking python3 alone would let a real python on
+# the box silently answer for tier 2 instead of reaching tier 3.
+hide_command "$TIER3_MOCK" "python"
+hide_command "$TIER3_MOCK" "py"
 SAVED_PATH_TIER3="$PATH"
 export PATH="$TIER3_MOCK:$PATH"
 pretty_json=$(printf '{\n  "session_id": "%s",\n  "source": "startup"\n}' "$sid")

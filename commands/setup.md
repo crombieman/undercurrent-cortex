@@ -25,7 +25,7 @@ Run these checks and print findings:
 - `uname -a` — OS and architecture
 - `bash --version | head -1` — bash version
 - `git --version` — git version
-- `python3 --version 2>/dev/null || echo "python3 not found (optional)"` — python3 (optional — accelerates JSON parsing; pure-bash fallback covers everything)
+- `python3 --version 2>/dev/null || python --version 2>/dev/null || py -3 --version 2>/dev/null || echo "no usable Python 3 (optional)"` — Python 3 (optional — accelerates JSON parsing; pure-bash fallback covers everything). Mirrors the runtime resolver's candidate chain: on Windows the Store's `python3` app-execution alias is a stub that exits without running Python, so the chain falls through to `python` / `py -3` exactly as the hooks do.
 - `jq --version 2>/dev/null || echo "jq not found (optional)"` — jq (optional, used for JSON parsing)
 
 ### 2. Verify CLAUDE.md

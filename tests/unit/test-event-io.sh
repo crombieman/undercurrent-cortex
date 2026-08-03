@@ -162,14 +162,23 @@ unset CORTEX_PROJECT_DIR_OVERRIDE
 # resolvable afterward on any box that has one installed). See task report.
 jq() { return 127; }
 python3() { return 127; }
-export -f jq python3
+# python/py too: tier 2 now falls back python3 -> python -> py -3
+# (python-resolve.sh), so masking python3 alone would let a real python on
+# the box silently answer for tier 2 — same masked-test trap as above.
+python() { return 127; }
+py() { return 127; }
+export -f jq python3 python py
 
 # Verify the masking actually took (invoking jq/python3 must fail) — a false
 # pass here would mean the tests below aren't exercising tier 3 at all.
 jq_masked=no; jq >/dev/null 2>&1 || jq_masked=yes
 py_masked=no; python3 >/dev/null 2>&1 || py_masked=yes
+plain_masked=no; python >/dev/null 2>&1 || plain_masked=yes
+launcher_masked=no; py >/dev/null 2>&1 || launcher_masked=yes
 assert_eq "tier3_test_jq_masked" "yes" "$jq_masked"
 assert_eq "tier3_test_python3_masked" "yes" "$py_masked"
+assert_eq "tier3_test_python_masked" "yes" "$plain_masked"
+assert_eq "tier3_test_py_launcher_masked" "yes" "$launcher_masked"
 
 TDIR5=$(mktemp -d)
 f5=$(create_event_log "$TDIR5/.claude" "sid-tier3")
@@ -189,7 +198,7 @@ resolve_event_log '{"session_id":"dup-first","other":"x","session_id":"dup-secon
 assert_eq "resolve_duplicate_key_first_wins" "$f6" "$EVENT_LOG"
 unset CORTEX_PROJECT_DIR_OVERRIDE
 
-unset -f jq python3
+unset -f jq python3 python py
 
 # --- eio_project_dir / eio_get_profile / eio_item_hash (wave 2) ---
 TDIR4=$(mktemp -d)
