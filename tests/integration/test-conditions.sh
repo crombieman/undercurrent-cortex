@@ -146,26 +146,27 @@ git -C "$_TEST_TMPDIR" add -A 2>/dev/null || true
 out=$(run_hook stop-gate.sh "$(mock_json "session_id=cond-block")")
 assert_contains "core_stop_gate_still_blocks" "$out" '"decision":"block"'
 
-# Same session under LAB with a plan_mode event: the codex reminder fires
-# (proving the reminder path is condition-gated, not deleted).
+# Same session under LAB with plan mode and a commit but no logged decision:
+# the Gate 7 decisions reminder fires (proving the reminder path is
+# condition-gated, not deleted). Until 2026-09-27 this used the Codex review
+# reminder, retired when Will ended Codex reviews; it must never appear.
 setup_test
 set_condition lab
 LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "cond-remind" \
-  "1700000002|plan_mode|used")
+  "1700000002|plan_mode|used" \
+  "1700000003|commit|abc1234 feat: planned work")
 out=$(run_hook stop-gate.sh "$(mock_json "session_id=cond-remind")")
-assert_contains "lab_codex_reminder_fires" "$out" "Codex review not dispatched"
-assert_eq "lab_codex_intervention_recorded" "1" \
-  "$(count_events intervention codex_reminder '' "$LOG")"
+assert_contains "lab_reminder_fires" "$out" "Decisions not captured"
+assert_not_contains "lab_no_codex_reminder" "$out" "Codex review"
 
-# And the SAME plan-mode-only session under core: approves silently.
+# And the SAME session under core: approves silently.
 setup_test
 set_condition core
 LOG=$(create_event_log "$_TEST_TMPDIR/.claude" "cond-noremind" \
-  "1700000002|plan_mode|used")
+  "1700000002|plan_mode|used" \
+  "1700000003|commit|abc1234 feat: planned work")
 out=$(run_hook stop-gate.sh "$(mock_json "session_id=cond-noremind")")
 assert_eq "core_reminders_fully_silent" "{}" "$out"
-assert_eq "core_no_codex_intervention" "0" \
-  "$(count_events intervention codex_reminder '' "$LOG")"
 
 # =============================================================
 # 4. Lab re-edit warning still fires (the treatment is gated, not gone)

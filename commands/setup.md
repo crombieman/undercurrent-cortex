@@ -62,7 +62,7 @@ Check the current Cortex condition and explain:
 - Display current condition (default: `lab`)
 - Explain the two conditions (calibration wave — these back the Core/Lab experiment):
   - **core** — Control: event recording, carry-over, and blocking protection gates ONLY. Zero adaptive output — no nudges, warnings, context injection, health display, or synthesis instructions.
-  - **lab** — Core plus the frozen adaptive tier: synthesis tasks, health pulse, interventions (commit nudge, re-edit warning, journal checkpoint, codex reminder), keyword context injection, sensory scan.
+  - **lab** — Core plus the frozen adaptive tier: synthesis tasks, health pulse, interventions (commit nudge, re-edit warning, journal checkpoint), keyword context injection, sensory scan.
   - Legacy names alias: `minimal`→core, `standard`/`strict`→lab (strict's TDD deny is retired).
 - To change: `export CORTEX_PROFILE=core` or write the condition name to `.claude/cortex/profile.local`
 

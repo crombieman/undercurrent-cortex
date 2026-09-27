@@ -173,7 +173,7 @@ Each gate produces either a **finding** (something discovered) or **"clear with 
 
 "Clear with evidence" can be one line: `"row count: 3361 * 1 = 3361 < 50K — within limits."`
 
-On audit completion, dispatch a Codex review of the audited plan when the Codex CLI is available (pre-authorized — no need to ask; dispatch and result-harvest are two separate steps). The stop-gate Codex reminder is the structural backstop; this mention is the belt.
+On audit completion, review the audited plan inline in the working session: your own fresh full read, started from the plan's goal restated plainly, covering every plan the audit covered. Never dispatch a Codex job or a fresh-context review agent for it (Will, 2026-09-26 and 2026-09-27: Codex reviews cost too much context and time).
 
 ## Gate Rent (spec §7.2 — gates pay for their place)
 

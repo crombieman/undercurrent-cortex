@@ -61,7 +61,7 @@ Cortex runs in one of two experimental conditions (all hooks fire regardless; th
 
 | Condition | Behavior |
 |-----------|----------|
-| `lab` (default) | Core plus the frozen adaptive tier: synthesis tasks, health pulse and trend, interventions (commit nudge, re-edit warning, journal checkpoint, codex reminder), keyword context injection, sensory scan, social patterns |
+| `lab` (default) | Core plus the frozen adaptive tier: synthesis tasks, health pulse and trend, interventions (commit nudge, re-edit warning, journal checkpoint), keyword context injection, sensory scan, social patterns |
 | `core` | The control: event recording, carry-over, and blocking protection gates ONLY. Zero adaptive output — a core session emits no nudges, warnings, injections, or health display (test-enforced) |
 
 Legacy profile names alias: `minimal`→core, `standard`/`strict`→lab (strict's TDD deny is retired). Set via `CORTEX_PROFILE` env var or `.claude/cortex/profile.local` file in your project.
@@ -133,7 +133,7 @@ When Claude tries to end the session (Stop event), the gates run. Gates are **ho
 | 2 | Docs not updated after architectural changes (only if `architectural_patterns` is configured) | Reminds |
 | 6 | Root cause not documented after `fix:` commits | Reminds |
 | 7 | Decisions not captured after a plan-mode session | Reminds |
-| 8 | Codex review not dispatched on a substantial session (plan mode used, or 4+ files) | Reminds |
+| 8 | Retired 2026-09-27: the Codex review reminder (reviews run inline in the working session) | None |
 
 Escape hatch: after 2 consecutive blocked stops, the 3rd force-approves — sometimes you genuinely need to stop.
 
@@ -221,7 +221,7 @@ The organism reads its own health history and adjusts behavior — and since v4,
 
 Cautious mode doesn't block anything — it injects one gentle reminder per session.
 
-The loop also **grades itself**: every nudge it fires (commit nudge, re-edit warning, journal checkpoint, cautious-mode injection, Codex reminder) is logged as an `intervention` event and scored at read time for follow-through — did a commit actually land after the nudge? Any nudge fired 10+ times with under 20% follow-through is surfaced as a retirement candidate every 10th session. A feedback system that can't tell whether its feedback works is decoration; this one keeps receipts.
+The loop also **grades itself**: every nudge it fires (commit nudge, re-edit warning, journal checkpoint, cautious-mode injection) is logged as an `intervention` event and scored at read time for follow-through — did a commit actually land after the nudge? Any nudge fired 10+ times with under 20% follow-through is surfaced as a retirement candidate every 10th session. A feedback system that can't tell whether its feedback works is decoration; this one keeps receipts.
 
 *Where:* `session-start` computes mode from `lib/health-trend.sh`; `lib/event-io.sh` (`eio_intervention_report`) scores follow-through; `/status` and the statusline display the rates
 
@@ -251,7 +251,7 @@ The honest ledger. "Blocks" means a hard deny or a blocked Stop; everything else
 | Plan-file guard — overwriting an existing plan | **Blocks once** | Same-path retry allowed (deliberate rewrite) |
 | TDD guard | Reminds (lab only) | Once per session; the old strict-profile deny is retired |
 | Stop Gates 2/6/7 — docs / root-cause / decisions | Reminds (lab only) | Never emit a block |
-| Codex-review gate | Reminds (lab only) | Promotion to blocking runs through follow-through data, not fiat |
+| Codex-review gate | Retired 2026-09-27 | Reviews run inline in the working session |
 | Commit nudge, re-edit warning, journal checkpoint | Reminds (lab only) | Each fire is scored for follow-through |
 | Cautious mode | Reminds (lab only) | One injection per session |
 | Health trend, domain tags, hot files, intervention rates | Derives (lab display) | Read-time computation from logs; drives nothing directly |
