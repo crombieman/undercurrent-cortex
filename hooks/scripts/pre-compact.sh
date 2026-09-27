@@ -30,25 +30,30 @@ if [ -z "$EVENT_LOG" ] || [ ! -f "$EVENT_LOG" ]; then
   exit 0
 fi
 
-# --- Optional transcript scan: append discovered items as carry_over events (I3 fix) ---
+# --- Optional transcript scan: append declared items as carry_over events (I3 fix) ---
+# A declaration is a [carry-over] or [mid-session pin] tag that STARTS a line of user or
+# assistant message text. Everything else that names a tag is not one: hook output (the
+# session-start boilerplate itself names [carry-over]), tool results (journals read back),
+# tool inputs (a journal write meant for the NEXT session), thinking, and mid-sentence
+# mentions. Transcript lines are compact JSON with one content block per message line, and
+# quotes inside strings are escaped, so a '"type":"..."' substring only ever matches real
+# structure. An item runs to the end of its own logical line (the next "\n" escape or the
+# closing quote), never to the end of the JSONL line: 2026-09-27, whole 2-75 KB lines of
+# hook text and tool output were recorded as items, so every compacted session blocked at
+# Stop and session-start re-minted the blobs into the next session.
 transcript_path=$(printf '%s' "$INPUT" | extract_json_field "transcript_path")
 if [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
-  tagged_items=$(grep -oE '\[carry-over\].*' "$transcript_path" 2>/dev/null | head -10 || true)
-  if [ -n "$tagged_items" ]; then
+  declared=$(grep -E '"type":"(user|assistant)"' "$transcript_path" 2>/dev/null \
+    | grep -vE '"type":"(tool_result|tool_use|thinking|attachment)"' \
+    | grep -oE '("|\\n)[[:space:]]*([-*][[:space:]]+)?\[(carry-over|mid-session pin)\]([^"\\]|\\[^n])*' \
+    | sed -E 's/^("|\\n)[[:space:]]*([-*][[:space:]]+)?//; s/\\"/"/g; s/\\\\/\\/g' \
+    | awk '!seen[$0]++' | head -10 || true)
+  if [ -n "$declared" ]; then
     while IFS= read -r item; do
       if [ -n "$item" ]; then
         append_event "carry_over" "$item"
       fi
-    done <<< "$tagged_items"
-  fi
-
-  pin_items=$(grep -oE '\[mid-session pin\].*' "$transcript_path" 2>/dev/null | head -10 || true)
-  if [ -n "$pin_items" ]; then
-    while IFS= read -r item; do
-      if [ -n "$item" ]; then
-        append_event "carry_over" "$item"
-      fi
-    done <<< "$pin_items"
+    done <<< "$declared"
   fi
 fi
 
